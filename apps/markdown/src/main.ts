@@ -8,6 +8,29 @@ import { EditorView, basicSetup } from 'codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 import { yCollab } from 'y-codemirror.next';
 
+// File System Access API type declarations
+declare global {
+  interface Window {
+    showOpenFilePicker(options?: OpenFilePickerOptions): Promise<FileSystemFileHandle[]>;
+    showSaveFilePicker(options?: SaveFilePickerOptions): Promise<FileSystemFileHandle>;
+  }
+}
+
+interface OpenFilePickerOptions {
+  types?: Array<{
+    description?: string;
+    accept: Record<string, string[]>;
+  }>;
+}
+
+interface SaveFilePickerOptions {
+  suggestedName?: string;
+  types?: Array<{
+    description?: string;
+    accept: Record<string, string[]>;
+  }>;
+}
+
 // ── Helpers ──
 
 function $(id: string): HTMLElement {
@@ -43,12 +66,14 @@ let hostRoom: Room | null = null;
 let peerRoom: Room | null = null;
 let hostConnected = false;
 let peerConnected = false;
+let isHost = false;
 
 const baseUrl = window.location.href.split('#')[0];
 
 // ── Yjs CRDT state ──
 
 let ydoc: Y.Doc | null = null;
+let ytext: Y.Text | null = null;
 let editorView: EditorView | null = null;
 let editorInitialized = false;
 let isRemoteUpdate = false;
@@ -59,7 +84,7 @@ function initCollaborativeEditor() {
 
   // Create Yjs document
   ydoc = new Y.Doc();
-  const ytext = ydoc.getText('markdown');
+  ytext = ydoc.getText('markdown');
 
   // Create CodeMirror editor
   const editorEl = document.getElementById('editor')!;
@@ -87,6 +112,70 @@ function initCollaborativeEditor() {
   log('peer', 'system', '📝 Collaborative editor initialized');
 }
 
+// ── File System Access API (host only) ──
+
+let fileHandle: FileSystemFileHandle | null = null;
+
+const openFileBtn = document.getElementById('open-file-btn') as HTMLButtonElement;
+const saveFileBtn = document.getElementById('save-file-btn') as HTMLButtonElement;
+
+openFileBtn?.addEventListener('click', async () => {
+  if (!isHost) return;
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{
+        description: 'Markdown files',
+        accept: { 'text/markdown': ['.md'] },
+      }],
+    });
+    fileHandle = handle;
+    const file = await handle.getFile();
+    const content = await file.text();
+
+    // Replace Yjs document content
+    ydoc!.transact(() => {
+      ytext!.delete(0, ytext!.length);
+      ytext!.insert(0, content);
+    });
+
+    log('host', 'system', `Opened: ${file.name}`);
+  } catch (err: any) {
+    if (err.name !== 'AbortError') {
+      log('host', 'system', `ERROR: ${err.message}`);
+    }
+  }
+});
+
+saveFileBtn?.addEventListener('click', async () => {
+  if (!isHost) return;
+  if (!fileHandle) {
+    // No file opened yet — use save-as flow
+    try {
+      fileHandle = await window.showSaveFilePicker({
+        suggestedName: 'document.md',
+        types: [{
+          description: 'Markdown files',
+          accept: { 'text/markdown': ['.md'] },
+        }],
+      });
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        log('host', 'system', `ERROR: ${err.message}`);
+      }
+      return;
+    }
+  }
+
+  try {
+    const writable = await fileHandle.createWritable();
+    await writable.write(ytext!.toString());
+    await writable.close();
+    log('host', 'system', `Saved: ${fileHandle.name}`);
+  } catch (err: any) {
+    log('host', 'system', `ERROR saving: ${err.message}`);
+  }
+});
+
 // ── HOST ──
 
 async function hostCreateRoom() {
@@ -97,6 +186,11 @@ async function hostCreateRoom() {
   try {
     const { url, room } = await createRoom(baseUrl);
     hostRoom = room;
+    isHost = true;
+
+    // Enable file buttons for host
+    if (openFileBtn) openFileBtn.disabled = false;
+    if (saveFileBtn) saveFileBtn.disabled = false;
 
     $('host-offer-url').textContent = url;
     $('host-offer-url').classList.remove('empty');
