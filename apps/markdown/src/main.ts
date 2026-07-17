@@ -2,11 +2,8 @@ import { createRoom, joinRoom, P2PRoom } from '../../../dist/index.js';
 import type { Room } from '../../../dist/index.js';
 import './style.css';
 
-// Yjs + CodeMirror
+// Yjs
 import * as Y from 'yjs';
-import { EditorView, basicSetup } from 'codemirror';
-import { markdown } from '@codemirror/lang-markdown';
-import { yCollab } from 'y-codemirror.next';
 
 // File System Access API type declarations
 declare global {
@@ -60,6 +57,33 @@ function urlSizeKB(url: string): string {
   return `URL segment: ${(match[1].length / 1024).toFixed(1)} KB`;
 }
 
+// ── Message encoding (0x00 = chat text, 0x01 = Yjs CRDT) ──
+
+function encodeChat(text: string): Uint8Array {
+  const encoded = new TextEncoder().encode(text);
+  const msg = new Uint8Array(1 + encoded.length);
+  msg[0] = 0x00;
+  msg.set(encoded, 1);
+  return msg;
+}
+
+function encodeYjs(data: Uint8Array): Uint8Array {
+  const msg = new Uint8Array(1 + data.length);
+  msg[0] = 0x01;
+  msg.set(data, 1);
+  return msg;
+}
+
+function decodeMessage(data: Uint8Array): { type: 'chat'; text: string } | { type: 'yjs'; update: Uint8Array } {
+  if (data.length === 0) return { type: 'chat', text: '' };
+  if (data[0] === 0x01) {
+    return { type: 'yjs', update: data.slice(1) };
+  }
+  // 0x00 or legacy (no prefix) — treat as chat
+  const start = data[0] === 0x00 ? 1 : 0;
+  return { type: 'chat', text: new TextDecoder().decode(data.slice(start)) };
+}
+
 // ── State ──
 
 let hostRoom: Room | null = null;
@@ -74,7 +98,6 @@ const baseUrl = window.location.href.split('#')[0];
 
 let ydoc: Y.Doc | null = null;
 let ytext: Y.Text | null = null;
-let editorView: EditorView | null = null;
 let editorInitialized = false;
 let isRemoteUpdate = false;
 
@@ -86,26 +109,34 @@ function initCollaborativeEditor() {
   ydoc = new Y.Doc();
   ytext = ydoc.getText('markdown');
 
-  // Create CodeMirror editor
-  const editorEl = document.getElementById('editor')!;
-  editorView = new EditorView({
-    doc: ytext.toString(),
-    extensions: [
-      basicSetup,
-      markdown(),
-      yCollab(ytext, null),
-    ],
-    parent: editorEl,
-  });
+  // Use textarea for simplicity
+  const textarea = document.getElementById('editor-textarea') as HTMLTextAreaElement;
+  textarea.disabled = false;
 
   // Show editor section
   document.getElementById('editor-section')!.style.display = 'block';
 
-  // Wire Yjs updates through the p2p data channels
+  // Local edit → Yjs → send to peers
+  textarea.addEventListener('input', () => {
+    if (isRemoteUpdate) return;
+    ydoc!.transact(() => {
+      ytext!.delete(0, ytext!.length);
+      ytext!.insert(0, textarea.value);
+    });
+  });
+
+  // Yjs update → send to peers via p2p
   ydoc.on('update', (update: Uint8Array) => {
-    if (isRemoteUpdate) return; // don't echo back remote updates
-    if (hostRoom && hostConnected) hostRoom.send(update);
-    if (peerRoom && peerConnected) peerRoom.send(update);
+    if (isRemoteUpdate) return;
+    const msg = encodeYjs(update);
+    if (hostRoom && hostConnected) hostRoom.send(msg);
+    if (peerRoom && peerConnected) peerRoom.send(msg);
+  });
+
+  // Remote Yjs update → textarea
+  ydoc.on('update', () => {
+    // updates applied via Y.applyUpdate in onMessage handler trigger this
+    // textarea sync happens in the apply path below
   });
 
   log('host', 'system', '📝 Collaborative editor initialized');
@@ -138,6 +169,10 @@ openFileBtn?.addEventListener('click', async () => {
       ytext!.insert(0, content);
     });
 
+    // Update textarea
+    const textarea = document.getElementById('editor-textarea') as HTMLTextAreaElement;
+    textarea.value = content;
+
     log('host', 'system', `Opened: ${file.name}`);
   } catch (err: any) {
     if (err.name !== 'AbortError') {
@@ -149,7 +184,6 @@ openFileBtn?.addEventListener('click', async () => {
 saveFileBtn?.addEventListener('click', async () => {
   if (!isHost) return;
   if (!fileHandle) {
-    // No file opened yet — use save-as flow
     try {
       fileHandle = await window.showSaveFilePicker({
         suggestedName: 'document.md',
@@ -188,7 +222,6 @@ async function hostCreateRoom() {
     hostRoom = room;
     isHost = true;
 
-    // Enable file buttons for host
     if (openFileBtn) openFileBtn.disabled = false;
     if (saveFileBtn) saveFileBtn.disabled = false;
 
@@ -201,15 +234,19 @@ async function hostCreateRoom() {
     ($('host-answer-btn') as HTMLButtonElement).disabled = false;
 
     room.onMessage((data: string | Uint8Array, peerId: string) => {
-      if (data instanceof Uint8Array) {
-        // Yjs CRDT update
+      if (!(data instanceof Uint8Array)) return;
+      const decoded = decodeMessage(data);
+      if (decoded.type === 'yjs') {
         if (ydoc) {
           isRemoteUpdate = true;
-          Y.applyUpdate(ydoc, data);
+          Y.applyUpdate(ydoc, decoded.update);
+          // Sync textarea
+          const textarea = document.getElementById('editor-textarea') as HTMLTextAreaElement;
+          textarea.value = ytext!.toString();
           isRemoteUpdate = false;
         }
-      } else if (typeof data === 'string') {
-        log('host', 'received', `Peer(${peerId}): ${data}`);
+      } else {
+        log('host', 'received', `Peer(${peerId}): ${decoded.text}`);
       }
     });
 
@@ -219,13 +256,12 @@ async function hostCreateRoom() {
       log('host', 'system', `🎉 Connection established! (peer: ${peerId})`);
       enableMsg('host', true);
 
-      // Initialize collaborative editor on first connection
       initCollaborativeEditor();
 
       // Send initial Yjs state to the newly connected peer
       if (ydoc) {
         const update = Y.encodeStateAsUpdate(ydoc);
-        room.send(update);
+        room.send(encodeYjs(update));
       }
     });
   } catch (err: any) {
@@ -258,7 +294,7 @@ function hostSend() {
   const input = $('host-msg-input') as HTMLInputElement;
   const text = input.value.trim();
   if (!text || !hostRoom || !hostConnected) return;
-  hostRoom.send(text);
+  hostRoom.send(encodeChat(text));
   log('host', 'sent', `Me: ${text}`);
   input.value = '';
 }
@@ -284,31 +320,30 @@ async function peerJoin() {
     log('peer', 'system', 'Answer generated');
     log('peer', 'system', 'Copy the Answer URL and paste in Host panel');
     setStatus('peer', 'connecting', 'waiting for host...');
-    // Enable messaging — simple-peer buffers until connected
     enableMsg('peer', true);
     peerConnected = true;
 
     room.onMessage((data: string | Uint8Array, peerId: string) => {
-      if (data instanceof Uint8Array) {
-        // Yjs CRDT update — first update also confirms connection
+      if (!(data instanceof Uint8Array)) return;
+      const decoded = decodeMessage(data);
+      if (decoded.type === 'yjs') {
         if (ydoc) {
           isRemoteUpdate = true;
-          Y.applyUpdate(ydoc, data);
+          Y.applyUpdate(ydoc, decoded.update);
+          const textarea = document.getElementById('editor-textarea') as HTMLTextAreaElement;
+          textarea.value = ytext!.toString();
           isRemoteUpdate = false;
         }
-      } else if (typeof data === 'string') {
-        // First chat message means we're truly connected
+      } else {
         if (!peerConnected) {
           peerConnected = true;
           setStatus('peer', 'connected', 'connected');
           log('peer', 'system', '🎉 Connection established!');
         }
-        log('peer', 'received', `Host(${peerId}): ${data}`);
+        log('peer', 'received', `Host(${peerId}): ${decoded.text}`);
       }
     });
 
-    // Initialize editor after peer joins (will be populated by host's initial state)
-    // Use a microtask to ensure room.onMessage is registered first
     setTimeout(() => initCollaborativeEditor(), 0);
   } catch (err: any) {
     setStatus('peer', 'error', 'error');
@@ -322,7 +357,7 @@ function peerSend() {
   const input = $('peer-msg-input') as HTMLInputElement;
   const text = input.value.trim();
   if (!text || !peerRoom || !peerConnected) return;
-  peerRoom.send(text);
+  peerRoom.send(encodeChat(text));
   log('peer', 'sent', `Me: ${text}`);
   input.value = '';
 }
