@@ -3,58 +3,54 @@ import type { Room } from '../../../dist/index.js';
 import './style.css';
 
 import * as Y from 'yjs';
+import { EditorView, basicSetup } from 'codemirror';
+import { markdown } from '@codemirror/lang-markdown';
 
-// File System Access API type declarations
+// File System Access API types
 declare global {
   interface Window {
-    showOpenFilePicker(options?: OpenFilePickerOptions): Promise<FileSystemFileHandle[]>;
-    showSaveFilePicker(options?: SaveFilePickerOptions): Promise<FileSystemFileHandle>;
+    showOpenFilePicker(o?: any): Promise<FileSystemFileHandle[]>;
+    showSaveFilePicker(o?: any): Promise<FileSystemFileHandle>;
   }
 }
 
-interface OpenFilePickerOptions {
-  types?: Array<{ description?: string; accept: Record<string, string[]> }>;
-}
-
-interface SaveFilePickerOptions {
-  suggestedName?: string;
-  types?: Array<{ description?: string; accept: Record<string, string[]> }>;
-}
-
-// ── Helpers ──
+// ── DOM Helpers ──
 
 function $(id: string): HTMLElement { return document.getElementById(id)!; }
-
-function log(panel: string, type: string, text: string) {
-  const el = $(`${panel}-log`);
-  el.innerHTML += `<div class="entry ${type}">[${new Date().toLocaleTimeString()}] ${text}</div>`;
-  el.scrollTop = el.scrollHeight;
+function el(tag: string, attrs: Record<string, string> = {}, children: (string | Node)[] = []): HTMLElement {
+  const e = document.createElement(tag);
+  Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+  children.forEach(c => e.append(c));
+  return e;
 }
 
-function setStatus(panel: string, cls: string, text: string) {
-  const el = $(`${panel}-status`);
+function log(type: string, text: string) {
+  const logEl = $('chat-log');
+  logEl.innerHTML += `<div class="entry ${type}">[${new Date().toLocaleTimeString()}] ${text}</div>`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setStatus(cls: string, text: string) {
+  const el = $('main-status');
   el.className = `status ${cls}`;
   el.textContent = text;
 }
 
-function enableMsg(panel: string, enabled: boolean) {
-  ($(`${panel}-msg-input`) as HTMLInputElement).disabled = !enabled;
-  ($(`${panel}-send-btn`) as HTMLButtonElement).disabled = !enabled;
+// ── Email validation ──
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateEmail(email: string): boolean {
+  return EMAIL_RE.test(email);
 }
 
-function urlSizeKB(url: string): string {
-  const match = url.match(/#sdp=(.*)/);
-  if (!match) return '';
-  return `URL segment: ${(match[1].length / 1024).toFixed(1)} KB`;
-}
-
-// ── Message encoding (0x00 = chat text, 0x01 = Yjs CRDT) ──
+// ── Message encoding (0x00 = chat, 0x01 = Yjs) ──
 
 function encodeChat(text: string): Uint8Array {
-  const encoded = new TextEncoder().encode(text);
-  const msg = new Uint8Array(1 + encoded.length);
+  const enc = new TextEncoder().encode(text);
+  const msg = new Uint8Array(1 + enc.length);
   msg[0] = 0x00;
-  msg.set(encoded, 1);
+  msg.set(enc, 1);
   return msg;
 }
 
@@ -72,322 +68,397 @@ function decodeMessage(data: Uint8Array): { type: 'chat'; text: string } | { typ
   return { type: 'chat', text: new TextDecoder().decode(data.slice(start)) };
 }
 
-// ── WS relay ──
+// ── WS Relay ──
 
 const WS_URL = `ws://${window.location.hostname}:8083`;
 let ws: WebSocket | null = null;
 
 function wsConnect(): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(WS_URL);
-    socket.onopen = () => resolve(socket);
-    socket.onerror = () => reject(new Error('WS connection failed'));
-    socket.onclose = () => { ws = null; };
-    ws = socket;
-  });
-}
-
-function wsRegister(): Promise<string> {
-  return new Promise((resolve) => {
-    ws!.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'registered') resolve(msg.room);
-    };
-    ws!.send(JSON.stringify({ type: 'host-register' }));
-  });
-}
-
-function wsWaitForAnswer(): Promise<any> {
-  return new Promise((resolve) => {
-    ws!.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'answer') resolve(msg.payload);
-    };
-  });
-}
-
-function wsRelayAnswer(roomId: string, payload: any): Promise<void> {
-  return new Promise((resolve, reject) => {
-    ws!.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'relayed') resolve();
-      if (msg.type === 'error') reject(new Error(msg.message));
-    };
-    ws!.send(JSON.stringify({ type: 'peer-relay', room: roomId, payload }));
+    const s = new WebSocket(WS_URL);
+    s.onopen = () => resolve(s);
+    s.onerror = () => reject(new Error('WS connection failed'));
+    s.onclose = () => { ws = null; };
+    ws = s;
   });
 }
 
 // ── State ──
 
-let hostRoom: Room | null = null;
-let peerRoom: Room | null = null;
-let hostConnected = false;
-let peerConnected = false;
+let myEmail = '';
 let isHost = false;
-
+let room: Room | null = null;
+let connected = false;
+let connectedUsers: string[] = [];
 const baseUrl = window.location.href.split('#')[0];
 
-// ── Yjs CRDT state ──
-
+// Yjs
 let ydoc: Y.Doc | null = null;
 let ytext: Y.Text | null = null;
-let editorInitialized = false;
+let editorView: EditorView | null = null;
 let isRemoteUpdate = false;
 
-function initCollaborativeEditor() {
-  if (editorInitialized) return;
-  editorInitialized = true;
+// File
+let fileHandle: FileSystemFileHandle | null = null;
+
+// ── Top Bar ──
+
+function updateTopBar() {
+  $('topbar').style.display = 'flex';
+  $('topbar-filename').textContent = fileHandle ? `📄 ${fileHandle.name}` : '📄 Untitled.md';
+  $('topbar-users').textContent = connectedUsers.length
+    ? `👤 ${connectedUsers.join(', ')}`
+    : '👤 No users connected';
+}
+
+// ── Pending Requests ──
+
+function addPendingRequest(email: string, answerB64: string) {
+  $('pending-section').style.display = 'block';
+  const list = $('pending-list');
+
+  const item = el('div', { class: 'pending-item' }, [
+    el('span', {}, [`🔔 ${email} wants to join`]),
+    el('div', { class: 'btn-row' }, [
+      el('button', {}, ['Approve']),
+      el('button', { class: 'reject-btn' }, ['Reject']),
+    ]),
+  ]);
+
+  const [approveBtn, rejectBtn] = item.querySelectorAll('button');
+
+  approveBtn.addEventListener('click', () => {
+    ws!.send(JSON.stringify({ type: 'host-approve', email }));
+    item.remove();
+    if ($('pending-list').children.length === 0) {
+      $('pending-section').style.display = 'none';
+    }
+  });
+
+  rejectBtn.addEventListener('click', () => {
+    ws!.send(JSON.stringify({ type: 'host-reject', email }));
+    item.remove();
+    if ($('pending-list').children.length === 0) {
+      $('pending-section').style.display = 'none';
+    }
+  });
+
+  list.appendChild(item);
+}
+
+// ── CodeMirror editor ──
+
+function initEditor() {
+  const editorEl = $('editor');
+  $('editor-section').style.display = 'flex';
+  $('chat-section').style.display = 'flex';
 
   ydoc = new Y.Doc();
   ytext = ydoc.getText('markdown');
 
-  const textarea = document.getElementById('editor-textarea') as HTMLTextAreaElement;
-  textarea.disabled = false;
-  document.getElementById('editor-section')!.style.display = 'block';
-
-  textarea.addEventListener('input', () => {
-    if (isRemoteUpdate) return;
-    ydoc!.transact(() => {
-      ytext!.delete(0, ytext!.length);
-      ytext!.insert(0, textarea.value);
-    });
+  editorView = new EditorView({
+    doc: '',
+    extensions: [
+      basicSetup,
+      markdown(),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged && !isRemoteUpdate) {
+          // Local edit → Yjs
+          const value = update.state.doc.toString();
+          ydoc!.transact(() => {
+            ytext!.delete(0, ytext!.length);
+            ytext!.insert(0, value);
+          });
+        }
+      }),
+      EditorView.theme({
+        '&': { backgroundColor: '#0d1117' },
+        '.cm-gutters': { backgroundColor: '#0d1117', borderRight: '1px solid #21262d', color: '#484f58' },
+        '.cm-activeLineGutter': { backgroundColor: '#161b22' },
+      }),
+    ],
+    parent: editorEl,
   });
 
+  // Yjs update → send to peers
   ydoc.on('update', (update: Uint8Array) => {
     if (isRemoteUpdate) return;
-    const msg = encodeYjs(update);
-    if (hostRoom && hostConnected) hostRoom.send(msg);
-    if (peerRoom && peerConnected) peerRoom.send(msg);
+    if (room && connected) room.send(encodeYjs(update));
   });
+
+  ($('chat-input') as HTMLInputElement).disabled = false;
+  ($('chat-send-btn') as HTMLButtonElement).disabled = false;
 }
-
-// ── File System Access API (host only) ──
-
-let fileHandle: FileSystemFileHandle | null = null;
-const openFileBtn = document.getElementById('open-file-btn') as HTMLButtonElement;
-const saveFileBtn = document.getElementById('save-file-btn') as HTMLButtonElement;
-
-openFileBtn?.addEventListener('click', async () => {
-  if (!isHost) return;
-  try {
-    const [handle] = await window.showOpenFilePicker({
-      types: [{ description: 'Markdown files', accept: { 'text/markdown': ['.md'] } }],
-    });
-    fileHandle = handle;
-    const content = await (await handle.getFile()).text();
-    ydoc!.transact(() => { ytext!.delete(0, ytext!.length); ytext!.insert(0, content); });
-    (document.getElementById('editor-textarea') as HTMLTextAreaElement).value = content;
-    log('host', 'system', `Opened: ${fileHandle.name}`);
-  } catch (err: any) {
-    if (err.name !== 'AbortError') log('host', 'system', `ERROR: ${err.message}`);
-  }
-});
-
-saveFileBtn?.addEventListener('click', async () => {
-  if (!isHost) return;
-  if (!fileHandle) {
-    try {
-      fileHandle = await window.showSaveFilePicker({
-        suggestedName: 'document.md',
-        types: [{ description: 'Markdown files', accept: { 'text/markdown': ['.md'] } }],
-      });
-    } catch (err: any) {
-      if (err.name !== 'AbortError') log('host', 'system', `ERROR: ${err.message}`);
-      return;
-    }
-  }
-  try {
-    const writable = await fileHandle.createWritable();
-    await writable.write(ytext!.toString());
-    await writable.close();
-    log('host', 'system', `Saved: ${fileHandle.name}`);
-  } catch (err: any) {
-    log('host', 'system', `ERROR saving: ${err.message}`);
-  }
-});
 
 // ── HOST ──
 
-async function hostCreateRoom() {
-  log('host', 'system', 'Creating room...');
-  setStatus('host', 'connecting', 'connecting to relay');
-  ($('host-create-btn') as HTMLButtonElement).disabled = true;
+async function createRoom() {
+  const email = ($('email-input') as HTMLInputElement).value.trim();
+  if (!validateEmail(email)) {
+    log('system', 'ERROR: Please enter a valid email');
+    return;
+  }
+  myEmail = email;
+  isHost = true;
+  ($('email-input') as HTMLInputElement).disabled = true;
+  ($('create-room-btn') as HTMLButtonElement).disabled = true;
+
+  log('system', 'Creating room...');
+  setStatus('connecting', 'connecting to relay');
 
   try {
-    // 1. Connect to WS relay
     await wsConnect();
 
-    // 2. Register as host → get room ID
-    const roomId = await wsRegister();
-    log('host', 'system', `Room registered: ${roomId}`);
+    // Register as host
+    const roomId = await new Promise<string>((resolve) => {
+      ws!.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'registered') resolve(msg.room);
+      };
+      ws!.send(JSON.stringify({ type: 'host-register' }));
+    });
 
-    // 3. Create WebRTC offer with room ID in URL
-    const { url, room } = await createRoom(baseUrl);
-    hostRoom = room;
-    isHost = true;
-    if (openFileBtn) openFileBtn.disabled = false;
-    if (saveFileBtn) saveFileBtn.disabled = false;
+    log('system', `Room registered: ${roomId}`);
 
-    // Build shareable URL: base + #room=xxx&sdp=xxx (URL-encoded)
+    // Create WebRTC offer
+    const { url, room: r } = await createRoom(baseUrl);
+    room = r;
+
     const sdpB64 = url.match(/#sdp=(.*)/)?.[1] || '';
     const shareUrl = `${baseUrl}#room=${roomId}&sdp=${encodeURIComponent(sdpB64)}`;
 
-    $('host-offer-url').textContent = shareUrl;
-    $('host-offer-url').classList.remove('empty');
-    $('host-offer-size').textContent = urlSizeKB(url);
-    log('host', 'system', 'Offer generated — share this URL with peer');
-    setStatus('host', 'connecting', 'waiting for peer');
+    $('share-url').textContent = shareUrl;
+    $('share-url').classList.remove('empty');
+    $('share-url-size').textContent = `URL segment: ${(sdpB64.length / 1024).toFixed(1)} KB`;
+    $('share-section').style.display = 'block';
 
-    // 4. Wait for peer's answer via WS relay
-    log('host', 'system', 'Waiting for peer to connect...');
-    const answerB64 = await wsWaitForAnswer();
-    log('host', 'system', 'Peer answer received, accepting...');
-    room.acceptAnswer(`#sdp=${answerB64}`);
+    setStatus('connecting', 'waiting for peer');
+    log('system', 'Share the URL above with a peer');
 
-    // 5. Set up message handling
-    room.onMessage((data: string | Uint8Array, peerId: string) => {
+    // Enable file buttons
+    ($('open-file-btn') as HTMLButtonElement).disabled = false;
+    ($('save-file-btn') as HTMLButtonElement).disabled = false;
+
+    // Handle WS messages (pending requests)
+    ws!.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'peer-request') {
+        log('system', `📩 ${msg.email} wants to join`);
+        // Store pending — when approved, the answer arrives via 'answer' event
+        _pendingEmail = msg.email;
+      } else if (msg.type === 'answer') {
+        log('system', `✅ ${msg.email || 'Peer'} approved — applying answer`);
+        room!.acceptAnswer(`#sdp=${msg.answerB64}`);
+      }
+    };
+
+    // Set up room message handling
+    r.onMessage((data: string | Uint8Array, peerId: string) => {
       if (!(data instanceof Uint8Array)) return;
       const decoded = decodeMessage(data);
       if (decoded.type === 'yjs') {
         if (ydoc) {
           isRemoteUpdate = true;
           Y.applyUpdate(ydoc, decoded.update);
-          (document.getElementById('editor-textarea') as HTMLTextAreaElement).value = ytext!.toString();
+          if (editorView) {
+            editorView.dispatch({
+              changes: { from: 0, to: editorView.state.doc.length, insert: ytext!.toString() },
+            });
+          }
           isRemoteUpdate = false;
         }
       } else {
-        log('host', 'received', `Peer(${peerId}): ${decoded.text}`);
+        log('received', `${peerId}: ${decoded.text}`);
       }
     });
 
-    room.onPeerJoin((peerId: string) => {
-      hostConnected = true;
-      setStatus('host', 'connected', 'connected');
-      log('host', 'system', `🎉 Connection established! (peer: ${peerId})`);
-      enableMsg('host', true);
-      initCollaborativeEditor();
-      if (ydoc) room.send(encodeYjs(Y.encodeStateAsUpdate(ydoc)));
+    r.onPeerJoin((peerId: string) => {
+      connected = true;
+      const email = _pendingEmail || peerId;
+      connectedUsers.push(email);
+      setStatus('connected', `connected (${connectedUsers.length} peer(s))`);
+      updateTopBar();
+      log('system', `🎉 ${email} connected!`);
+      if (!editorView) initEditor();
+      if (ydoc) room!.send(encodeYjs(Y.encodeStateAsUpdate(ydoc)));
     });
 
   } catch (err: any) {
-    setStatus('host', 'error', 'error');
-    log('host', 'system', `ERROR: ${err.message}`);
-    ($('host-create-btn') as HTMLButtonElement).disabled = false;
+    setStatus('error', 'error');
+    log('system', `ERROR: ${err.message}`);
+    ($('create-room-btn') as HTMLButtonElement).disabled = false;
+    ($('email-input') as HTMLInputElement).disabled = false;
   }
 }
 
-function hostSend() {
-  const input = $('host-msg-input') as HTMLInputElement;
-  const text = input.value.trim();
-  if (!text || !hostRoom || !hostConnected) return;
-  hostRoom.send(encodeChat(text));
-  log('host', 'sent', `Me: ${text}`);
-  input.value = '';
-}
+let _pendingEmail = '';
 
 // ── PEER ──
 
 function parseRoomFromUrl(): { roomId: string; offer: string } | null {
   const hash = window.location.hash;
   if (!hash) return null;
-  // Parse manually: #room=<id>&sdp=<url-encoded-base64>
   const m = hash.match(/^#room=([^&]+)&sdp=(.+)$/);
   if (!m) return null;
-  const roomId = m[1];
-  const sdp = decodeURIComponent(m[2]);
-  if (!roomId || !sdp) return null;
-  return { roomId, offer: sdp };
+  return { roomId: m[1], offer: decodeURIComponent(m[2]) };
 }
 
 async function peerAutoJoin(roomId: string, offerB64: string) {
-  log('peer', 'system', `Joining room ${roomId}...`);
-  setStatus('peer', 'connecting', 'connecting to relay');
-  ($('peer-join-btn') as HTMLButtonElement).disabled = true;
+  const email = ($('email-input') as HTMLInputElement).value.trim();
+  if (!validateEmail(email)) {
+    log('system', 'ERROR: Please enter a valid email to join');
+    return;
+  }
+  myEmail = email;
+  ($('email-input') as HTMLInputElement).disabled = true;
+  ($('create-room-btn') as HTMLButtonElement).disabled = true;
+
+  log('system', `Joining room ${roomId} as ${email}...`);
+  setStatus('connecting', 'connecting to relay');
 
   try {
-    // 1. Connect to WS relay
     await wsConnect();
 
-    // 2. Reconstruct offer URL and join room
+    // Join room
     const offerUrl = `${baseUrl}#sdp=${offerB64}`;
-    const { room, answerUrl } = await joinRoom(offerUrl, baseUrl);
-    peerRoom = room;
+    const { room: r, answerUrl } = await joinRoom(offerUrl, baseUrl);
+    room = r;
 
-    // 3. Relay answer back to host via WS (send raw base64)
     const match = answerUrl.match(/#sdp=(.*)/);
-    const answerB64 = match ? match[1] : null;
+    const answerB64 = match ? match[1] : '';
     if (!answerB64) throw new Error('Could not extract answer');
 
-    log('peer', 'system', 'Relaying answer to host...');
-    await wsRelayAnswer(roomId, answerB64);
+    // Send join request with email
+    ws!.send(JSON.stringify({
+      type: 'peer-join-request',
+      room: roomId,
+      email,
+      answerB64,
+    }));
 
-    setStatus('peer', 'connecting', 'waiting for host...');
-    enableMsg('peer', true);
-    peerConnected = true;
+    log('system', 'Join request sent — waiting for host approval...');
+    setStatus('connecting', 'awaiting approval');
 
-    // 4. Set up message handling
-    room.onMessage((data: string | Uint8Array, peerId: string) => {
+    // Wait for approval/rejection
+    ws!.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'waiting-approval') {
+        // already handled in status
+      } else if (msg.type === 'approved') {
+        log('system', '✅ Approved by host!');
+        setStatus('connected', 'connected');
+        connected = true;
+        connectedUsers.push('host');
+        updateTopBar();
+        initEditor();
+      } else if (msg.type === 'rejected') {
+        setStatus('error', 'rejected');
+        log('system', `❌ Rejected: ${msg.message}`);
+      }
+    };
+
+    // Room message handling
+    r.onMessage((data: string | Uint8Array, peerId: string) => {
       if (!(data instanceof Uint8Array)) return;
       const decoded = decodeMessage(data);
       if (decoded.type === 'yjs') {
         if (ydoc) {
           isRemoteUpdate = true;
           Y.applyUpdate(ydoc, decoded.update);
-          (document.getElementById('editor-textarea') as HTMLTextAreaElement).value = ytext!.toString();
+          if (editorView) {
+            editorView.dispatch({
+              changes: { from: 0, to: editorView.state.doc.length, insert: ytext!.toString() },
+            });
+          }
           isRemoteUpdate = false;
         }
       } else {
-        setStatus('peer', 'connected', 'connected');
-        log('peer', 'received', `Host(${peerId}): ${decoded.text}`);
+        log('received', `Host: ${decoded.text}`);
       }
     });
 
-    setTimeout(() => initCollaborativeEditor(), 0);
-
   } catch (err: any) {
-    setStatus('peer', 'error', 'error');
-    log('peer', 'system', `ERROR: ${err.message}`);
-    ($('peer-join-btn') as HTMLButtonElement).disabled = false;
+    setStatus('error', 'error');
+    log('system', `ERROR: ${err.message}`);
+    ($('create-room-btn') as HTMLButtonElement).disabled = false;
+    ($('email-input') as HTMLInputElement).disabled = false;
   }
 }
 
-function peerSend() {
-  const input = $('peer-msg-input') as HTMLInputElement;
+// ── Chat ──
+
+function sendChat() {
+  const input = $('chat-input') as HTMLInputElement;
   const text = input.value.trim();
-  if (!text || !peerRoom || !peerConnected) return;
-  peerRoom.send(encodeChat(text));
-  log('peer', 'sent', `Me: ${text}`);
+  if (!text || !room || !connected) return;
+  room.send(encodeChat(text));
+  log('sent', `Me: ${text}`);
   input.value = '';
 }
 
-// ── Event bindings ──
+// ── File System Access ──
 
-$('host-create-btn').addEventListener('click', hostCreateRoom);
-$('host-send-btn').addEventListener('click', hostSend);
-($('host-msg-input') as HTMLInputElement).addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') hostSend();
-});
-
-$('peer-join-btn').addEventListener('click', () => {
-  const raw = ($('peer-offer-input') as HTMLInputElement).value.trim();
-  if (raw) {
-    // Manual fallback: parse URL and auto-join
-    const parsed = parseRoomFromUrl();
-    if (parsed) peerAutoJoin(parsed.roomId, parsed.offer);
-    else log('peer', 'system', 'ERROR: Invalid URL');
+($('open-file-btn') as HTMLButtonElement).addEventListener('click', async () => {
+  if (!isHost) return;
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }],
+    });
+    fileHandle = handle;
+    const content = await (await handle.getFile()).text();
+    ydoc!.transact(() => { ytext!.delete(0, ytext!.length); ytext!.insert(0, content); });
+    if (editorView) {
+      editorView.dispatch({
+        changes: { from: 0, to: editorView.state.doc.length, insert: content },
+      });
+    }
+    updateTopBar();
+    log('system', `Opened: ${handle.name}`);
+  } catch (err: any) {
+    if (err.name !== 'AbortError') log('system', `ERROR: ${err.message}`);
   }
 });
-$('peer-send-btn').addEventListener('click', peerSend);
-($('peer-msg-input') as HTMLInputElement).addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') peerSend();
+
+($('save-file-btn') as HTMLButtonElement).addEventListener('click', async () => {
+  if (!isHost) return;
+  if (!fileHandle) {
+    try {
+      fileHandle = await window.showSaveFilePicker({
+        suggestedName: 'document.md',
+        types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }],
+      });
+      updateTopBar();
+    } catch (err: any) {
+      if (err.name !== 'AbortError') log('system', `ERROR: ${err.message}`);
+      return;
+    }
+  }
+  try {
+    const w = await fileHandle.createWritable();
+    await w.write(ytext!.toString());
+    await w.close();
+    log('system', `Saved: ${fileHandle.name}`);
+  } catch (err: any) {
+    log('system', `ERROR saving: ${err.message}`);
+  }
 });
 
-// ── Auto-detect peer mode on page load ──
+// ── Event Bindings ──
+
+($('create-room-btn') as HTMLButtonElement).addEventListener('click', createRoom);
+($('chat-send-btn') as HTMLButtonElement).addEventListener('click', sendChat);
+($('chat-input') as HTMLInputElement).addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChat();
+});
+
+// ── Auto-detect peer mode ──
 
 const parsed = parseRoomFromUrl();
 if (parsed) {
-  // We're a peer — hide the manual input and auto-join
-  ($('peer-offer-input') as HTMLInputElement).disabled = true;
-  ($('peer-offer-input') as HTMLInputElement).value = window.location.href;
-  peerAutoJoin(parsed.roomId, parsed.offer);
+  ($('create-room-btn') as HTMLButtonElement).textContent = 'Join Room';
+  ($('create-room-btn') as HTMLButtonElement).addEventListener('click', () => {
+    peerAutoJoin(parsed.roomId, parsed.offer);
+  }, { once: true });
+  // Show the email input as required before joining
+  ($('share-section') as HTMLElement).style.display = 'none';
 }
