@@ -5,4 +5,5 @@ export default defineConfig({
   dts: false,
   sourcemap: true,
   clean: true,
+  noExternal: ['simple-peer'],
 });
