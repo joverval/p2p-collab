@@ -8,12 +8,12 @@ export class P2PRoom implements Room {
   public readonly isHost: boolean;
 
   // Host state
-  private _hostOfferPeer?: SimplePeer.Instance;
-  private _peers: Map<string, SimplePeer.Instance> = new Map();
+  private _hostOfferPeer?: InstanceType<typeof SimplePeer>;
+  private _peers: Map<string, InstanceType<typeof SimplePeer>> = new Map();
   private _peerInfos: PeerInfo[] = [];
 
   // Peer state
-  private _peer?: SimplePeer.Instance;
+  private _peer?: InstanceType<typeof SimplePeer>;
 
   // Handlers
   private _onMessage?: (data: string | Uint8Array, peerId: string) => void;
@@ -134,7 +134,7 @@ export class P2PRoom implements Room {
 
   // ── Internal ──
 
-  private _onPeerConnected(peer: SimplePeer.Instance): void {
+  private _onPeerConnected(peer: InstanceType<typeof SimplePeer>): void {
     const peerId = `peer-${++peerCounter}`;
     this._peers.set(peerId, peer);
     this._peerInfos.push({
