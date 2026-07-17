@@ -228,8 +228,9 @@ async function hostCreateRoom() {
     if (openFileBtn) openFileBtn.disabled = false;
     if (saveFileBtn) saveFileBtn.disabled = false;
 
-    // Build shareable URL: base + #room=xxx&sdp=xxx
-    const shareUrl = url.replace('#sdp=', `#room=${roomId}&sdp=`);
+    // Build shareable URL: base + #room=xxx&sdp=xxx (URL-encoded)
+    const sdpB64 = url.match(/#sdp=(.*)/)?.[1] || '';
+    const shareUrl = `${baseUrl}#room=${roomId}&sdp=${encodeURIComponent(sdpB64)}`;
 
     $('host-offer-url').textContent = shareUrl;
     $('host-offer-url').classList.remove('empty');
@@ -239,9 +240,9 @@ async function hostCreateRoom() {
 
     // 4. Wait for peer's answer via WS relay
     log('host', 'system', 'Waiting for peer to connect...');
-    const payload = await wsWaitForAnswer();
+    const answerB64 = await wsWaitForAnswer();
     log('host', 'system', 'Peer answer received, accepting...');
-    room.acceptAnswer(JSON.stringify(payload));
+    room.acceptAnswer(`#sdp=${answerB64}`);
 
     // 5. Set up message handling
     room.onMessage((data: string | Uint8Array, peerId: string) => {
@@ -289,9 +290,11 @@ function hostSend() {
 function parseRoomFromUrl(): { roomId: string; offer: string } | null {
   const hash = window.location.hash;
   if (!hash) return null;
-  const params = new URLSearchParams(hash.slice(1));
-  const roomId = params.get('room');
-  const sdp = params.get('sdp');
+  // Parse manually: #room=<id>&sdp=<url-encoded-base64>
+  const m = hash.match(/^#room=([^&]+)&sdp=(.+)$/);
+  if (!m) return null;
+  const roomId = m[1];
+  const sdp = decodeURIComponent(m[2]);
   if (!roomId || !sdp) return null;
   return { roomId, offer: sdp };
 }
@@ -310,13 +313,13 @@ async function peerAutoJoin(roomId: string, offerB64: string) {
     const { room, answerUrl } = await joinRoom(offerUrl, baseUrl);
     peerRoom = room;
 
-    // 3. Relay answer back to host via WS
+    // 3. Relay answer back to host via WS (send raw base64)
     const match = answerUrl.match(/#sdp=(.*)/);
-    const answerPayload = match ? JSON.parse(atob(match[1])) : null;
-    if (!answerPayload) throw new Error('Could not decode answer');
+    const answerB64 = match ? match[1] : null;
+    if (!answerB64) throw new Error('Could not extract answer');
 
     log('peer', 'system', 'Relaying answer to host...');
-    await wsRelayAnswer(roomId, answerPayload);
+    await wsRelayAnswer(roomId, answerB64);
 
     setStatus('peer', 'connecting', 'waiting for host...');
     enableMsg('peer', true);
