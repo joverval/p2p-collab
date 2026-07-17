@@ -70,7 +70,7 @@ function decodeMessage(data: Uint8Array): { type: 'chat'; text: string } | { typ
 
 // ── WS Relay ──
 
-const WS_URL = `ws://${window.location.hostname}:8083`;
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
 let ws: WebSocket | null = null;
 
 function wsConnect(): Promise<WebSocket> {
@@ -442,22 +442,28 @@ function sendChat() {
   }
 });
 
-// ── Event Bindings ──
+// ── Event Bindings (HMR-safe via window flag) ──
 
-($('create-room-btn') as HTMLButtonElement).addEventListener('click', createRoom);
-($('chat-send-btn') as HTMLButtonElement).addEventListener('click', sendChat);
-($('chat-input') as HTMLInputElement).addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') sendChat();
-});
+if (!(window as any).__p2pBound) {
+  (window as any).__p2pBound = true;
 
-// ── Auto-detect peer mode ──
+  ($('create-room-btn') as HTMLButtonElement).addEventListener('click', createRoom);
+  ($('chat-send-btn') as HTMLButtonElement).addEventListener('click', sendChat);
+  ($('chat-input') as HTMLInputElement).addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendChat();
+  });
 
-const parsed = parseRoomFromUrl();
-if (parsed) {
-  ($('create-room-btn') as HTMLButtonElement).textContent = 'Join Room';
-  ($('create-room-btn') as HTMLButtonElement).addEventListener('click', () => {
-    peerAutoJoin(parsed.roomId, parsed.offer);
-  }, { once: true });
-  // Show the email input as required before joining
-  ($('share-section') as HTMLElement).style.display = 'none';
+  // ── Auto-detect peer mode ──
+
+  const parsed = parseRoomFromUrl();
+  if (parsed) {
+    ($('create-room-btn') as HTMLButtonElement).textContent = 'Join Room';
+    ($('create-room-btn') as HTMLButtonElement).replaceWith(
+      ($('create-room-btn') as HTMLButtonElement).cloneNode(true)
+    );
+    ($('create-room-btn') as HTMLButtonElement).addEventListener('click', () => {
+      peerAutoJoin(parsed.roomId, parsed.offer);
+    });
+    ($('share-section') as HTMLElement).style.display = 'none';
+  }
 }
