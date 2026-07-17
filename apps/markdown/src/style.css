@@ -8,6 +8,7 @@ body {
 }
 .panel {
   flex: 1;
+  max-width: 420px;
   padding: 24px;
   display: flex;
   flex-direction: column;

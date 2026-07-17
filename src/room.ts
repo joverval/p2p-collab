@@ -81,11 +81,10 @@ export class P2PRoom implements Room {
       });
 
       peer.on('connect', () => {
-        peer.on('data', (data: Uint8Array) => {
-          const text = new TextDecoder().decode(data);
-          this._onMessage?.(text, 'host');
-        });
+      peer.on('data', (data: Uint8Array) => {
+        this._onMessage?.(data, 'host');
       });
+    });
 
       peer.on('error', (err: Error) => {
         this._onError?.(err);
@@ -144,8 +143,7 @@ export class P2PRoom implements Room {
     this._onPeerJoin?.(peerId);
 
     peer.on('data', (data: Uint8Array) => {
-      const text = new TextDecoder().decode(data);
-      this._onMessage?.(text, peerId);
+      this._onMessage?.(data, peerId);
     });
 
     peer.on('close', () => {
