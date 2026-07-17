@@ -1,0 +1,101 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: system-ui, sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  display: flex;
+  height: 100vh;
+}
+.panel {
+  flex: 1;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-right: 1px solid #21262d;
+}
+.panel:last-child { border-right: none; }
+h2 { font-size: 18px; }
+.status {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-block;
+}
+.status.disconnected { background: #21262d; color: #8b949e; }
+.status.connecting { background: #1f2a37; color: #58a6ff; }
+.status.connected { background: #0d3324; color: #3fb950; }
+.status.error { background: #3d1418; color: #f85149; }
+
+.url-box {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px;
+  font-family: monospace;
+  font-size: 11px;
+  word-break: break-all;
+  max-height: 90px;
+  overflow-y: auto;
+  color: #7ee787;
+  line-height: 1.4;
+}
+.url-box.empty { color: #484f58; }
+
+.url-input {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px;
+  color: #c9d1d9;
+  font-family: monospace;
+  font-size: 12px;
+}
+.url-input:disabled { opacity: 0.4; }
+
+button {
+  background: #238636;
+  color: white;
+  border: 1px solid #2ea043;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+button:hover { background: #2ea043; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-row { display: flex; gap: 8px; align-items: center; }
+
+.log {
+  flex: 1;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 12px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 12px;
+  min-height: 0;
+}
+.log .entry { padding: 2px 0; }
+.log .sent { color: #58a6ff; }
+.log .received { color: #3fb950; }
+.log .system { color: #8b949e; }
+
+.msg-row { display: flex; gap: 8px; }
+.msg-row input {
+  flex: 1;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #c9d1d9;
+  font-size: 14px;
+}
+.url-size { font-size: 11px; color: #8b949e; margin-top: 2px; }
+.section-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
