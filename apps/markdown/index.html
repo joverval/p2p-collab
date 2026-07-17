@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>002: p2p-collab Library Integration</title>
+  <title>p2p-collab</title>
   <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
@@ -20,17 +20,9 @@
   </div>
 
   <div>
-    <div class="section-label">Offer URL (copy + share w/ peer)</div>
+    <div class="section-label">Share this URL with peer</div>
     <div class="url-box empty" id="host-offer-url">Click "Create Room" to generate</div>
     <div class="url-size" id="host-offer-size"></div>
-  </div>
-
-  <div>
-    <div class="section-label">Paste Peer's Answer URL</div>
-    <div class="btn-row">
-      <input class="url-input" id="host-answer-input" placeholder="Paste answer URL here...">
-      <button id="host-answer-btn" disabled>Apply</button>
-    </div>
   </div>
 
   <div class="msg-row">
@@ -51,17 +43,11 @@
   </div>
 
   <div>
-    <div class="section-label">Paste Host's Offer URL</div>
-    <div class="btn-row">
-      <input class="url-input" id="peer-offer-input" placeholder="Paste offer URL here...">
-      <button id="peer-join-btn">Join</button>
+    <div class="section-label">Open the host's URL or paste it here</div>
+    <input class="url-input" id="peer-offer-input" placeholder="Opening URL automatically...">
+    <div style="margin-top:6px;">
+      <button id="peer-join-btn">Join Manually</button>
     </div>
-  </div>
-
-  <div>
-    <div class="section-label">Answer URL (copy + paste in Host panel)</div>
-    <div class="url-box empty" id="peer-answer-url">Will appear after Join</div>
-    <div class="url-size" id="peer-answer-size"></div>
   </div>
 
   <div class="msg-row">
@@ -70,7 +56,7 @@
   </div>
 
   <div class="log" id="peer-log">
-    <div class="entry system">Paste host's offer URL and click Join</div>
+    <div class="entry system">Open a host URL to join automatically</div>
   </div>
 </div>
 
