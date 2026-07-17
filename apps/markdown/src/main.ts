@@ -70,7 +70,7 @@ function decodeMessage(data: Uint8Array): { type: 'chat'; text: string } | { typ
 
 // ── WS Relay ──
 
-const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+const WS_URL = `ws://${window.location.hostname}:8083`;
 let ws: WebSocket | null = null;
 
 function wsConnect(): Promise<WebSocket> {
@@ -192,15 +192,20 @@ function initEditor() {
 // ── HOST ──
 
 async function createRoom() {
+  // Disable immediately to prevent double-clicks / HMR duplicate listeners
+  const btn = $('create-room-btn') as HTMLButtonElement;
+  if (btn.disabled) return;
+  btn.disabled = true;
+
   const email = ($('email-input') as HTMLInputElement).value.trim();
   if (!validateEmail(email)) {
     log('system', 'ERROR: Please enter a valid email');
+    btn.disabled = false;
     return;
   }
   myEmail = email;
   isHost = true;
   ($('email-input') as HTMLInputElement).disabled = true;
-  ($('create-room-btn') as HTMLButtonElement).disabled = true;
 
   log('system', 'Creating room...');
   setStatus('connecting', 'connecting to relay');
@@ -303,6 +308,10 @@ function parseRoomFromUrl(): { roomId: string; offer: string } | null {
 }
 
 async function peerAutoJoin(roomId: string, offerB64: string) {
+  const btn = $('create-room-btn') as HTMLButtonElement;
+  if (btn.disabled) return;
+  btn.disabled = true;
+
   const email = ($('email-input') as HTMLInputElement).value.trim();
   if (!validateEmail(email)) {
     log('system', 'ERROR: Please enter a valid email to join');
