@@ -151,7 +151,6 @@ function addPendingRequest(email: string, answerB64: string) {
 function initEditor() {
   const editorEl = $('editor');
   $('editor-section').style.display = 'flex';
-  $('chat-section').style.display = 'flex';
 
   ydoc = new Y.Doc();
   ytext = ydoc.getText('markdown');
