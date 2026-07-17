@@ -2,6 +2,12 @@ import { createRoom, joinRoom, P2PRoom } from '../../../dist/index.js';
 import type { Room } from '../../../dist/index.js';
 import './style.css';
 
+// Yjs + CodeMirror
+import * as Y from 'yjs';
+import { EditorView, basicSetup } from 'codemirror';
+import { markdown } from '@codemirror/lang-markdown';
+import { yCollab } from 'y-codemirror.next';
+
 // ── Helpers ──
 
 function $(id: string): HTMLElement {
@@ -40,6 +46,47 @@ let peerConnected = false;
 
 const baseUrl = window.location.href.split('#')[0];
 
+// ── Yjs CRDT state ──
+
+let ydoc: Y.Doc | null = null;
+let editorView: EditorView | null = null;
+let editorInitialized = false;
+let isRemoteUpdate = false;
+
+function initCollaborativeEditor() {
+  if (editorInitialized) return;
+  editorInitialized = true;
+
+  // Create Yjs document
+  ydoc = new Y.Doc();
+  const ytext = ydoc.getText('markdown');
+
+  // Create CodeMirror editor
+  const editorEl = document.getElementById('editor')!;
+  editorView = new EditorView({
+    doc: ytext.toString(),
+    extensions: [
+      basicSetup,
+      markdown(),
+      yCollab(ytext, null),
+    ],
+    parent: editorEl,
+  });
+
+  // Show editor section
+  document.getElementById('editor-section')!.style.display = 'block';
+
+  // Wire Yjs updates through the p2p data channels
+  ydoc.on('update', (update: Uint8Array) => {
+    if (isRemoteUpdate) return; // don't echo back remote updates
+    if (hostRoom && hostConnected) hostRoom.send(update);
+    if (peerRoom && peerConnected) peerRoom.send(update);
+  });
+
+  log('host', 'system', '📝 Collaborative editor initialized');
+  log('peer', 'system', '📝 Collaborative editor initialized');
+}
+
 // ── HOST ──
 
 async function hostCreateRoom() {
@@ -60,7 +107,16 @@ async function hostCreateRoom() {
     ($('host-answer-btn') as HTMLButtonElement).disabled = false;
 
     room.onMessage((data: string | Uint8Array, peerId: string) => {
-      log('host', 'received', `Peer(${peerId}): ${data}`);
+      if (data instanceof Uint8Array) {
+        // Yjs CRDT update
+        if (ydoc) {
+          isRemoteUpdate = true;
+          Y.applyUpdate(ydoc, data);
+          isRemoteUpdate = false;
+        }
+      } else if (typeof data === 'string') {
+        log('host', 'received', `Peer(${peerId}): ${data}`);
+      }
     });
 
     room.onPeerJoin((peerId: string) => {
@@ -68,6 +124,15 @@ async function hostCreateRoom() {
       setStatus('host', 'connected', 'connected');
       log('host', 'system', `🎉 Connection established! (peer: ${peerId})`);
       enableMsg('host', true);
+
+      // Initialize collaborative editor on first connection
+      initCollaborativeEditor();
+
+      // Send initial Yjs state to the newly connected peer
+      if (ydoc) {
+        const update = Y.encodeStateAsUpdate(ydoc);
+        room.send(update);
+      }
     });
   } catch (err: any) {
     setStatus('host', 'error', 'error');
@@ -130,14 +195,27 @@ async function peerJoin() {
     peerConnected = true;
 
     room.onMessage((data: string | Uint8Array, peerId: string) => {
-      // First message means we're truly connected
-      if (!peerConnected) {
-        peerConnected = true;
-        setStatus('peer', 'connected', 'connected');
-        log('peer', 'system', '🎉 Connection established!');
+      if (data instanceof Uint8Array) {
+        // Yjs CRDT update — first update also confirms connection
+        if (ydoc) {
+          isRemoteUpdate = true;
+          Y.applyUpdate(ydoc, data);
+          isRemoteUpdate = false;
+        }
+      } else if (typeof data === 'string') {
+        // First chat message means we're truly connected
+        if (!peerConnected) {
+          peerConnected = true;
+          setStatus('peer', 'connected', 'connected');
+          log('peer', 'system', '🎉 Connection established!');
+        }
+        log('peer', 'received', `Host(${peerId}): ${data}`);
       }
-      log('peer', 'received', `Host(${peerId}): ${data}`);
     });
+
+    // Initialize editor after peer joins (will be populated by host's initial state)
+    // Use a microtask to ensure room.onMessage is registered first
+    setTimeout(() => initCollaborativeEditor(), 0);
   } catch (err: any) {
     setStatus('peer', 'error', 'error');
     log('peer', 'system', `ERROR: ${err.message}`);
