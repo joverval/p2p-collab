@@ -46,7 +46,7 @@ describe('P2PRoom', () => {
         const sig = mockPeerEvents[0]?.get('signal');
         sig?.({ type: 'offer', sdp: 'test-sdp' });
       }, 10);
-      const url = await room.offerUrl();
+      const { url } = await room.offerUrl();
       expect(url).toContain('#sdp=');
     });
 
@@ -65,19 +65,17 @@ describe('P2PRoom', () => {
 
     it('acceptAnswer signals the pending peer', async () => {
       const room = new P2PRoom(true, 'http://localhost');
-      // Trigger offer generation
       setTimeout(() => {
         const sig = mockPeerEvents[0]?.get('signal');
         sig?.({ type: 'offer', sdp: 'test' });
       }, 5);
-      await room.offerUrl();
+      const { offerId } = await room.offerUrl();
 
-      // Now accept answer — should call signal on the host peer
-      room.acceptAnswer('#sdp=' + btoa(JSON.stringify({ type: 'answer', sdp: 'peer-sdp' })));
-      // The signal method was called on the host peer (first mock instance)
-      const hostPeer = (room as any)._hostOfferPeer;
-      // After acceptAnswer, _hostOfferPeer should still exist (awaiting connect event)
-      expect(hostPeer).toBeTruthy();
+      // Now accept answer — should call signal on the pending peer
+      room.acceptAnswer(offerId, '#sdp=' + btoa(JSON.stringify({ type: 'answer', sdp: 'peer-sdp' })));
+      // The pending offer should still exist (awaiting connect event)
+      const pending = (room as any)._pendingOffers.get(offerId);
+      expect(pending).toBeTruthy();
     });
 
     it('broadcasts send() to all peers', () => {

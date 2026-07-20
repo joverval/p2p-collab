@@ -3,12 +3,13 @@ import { encodeSignal, decodeSignal } from './signal';
 import type { Room, RoomOptions, PeerInfo, SignalData } from './types';
 
 let peerCounter = 0;
+let offerCounter = 0;
 
 export class P2PRoom implements Room {
   public readonly isHost: boolean;
 
   // Host state
-  private _hostOfferPeer?: InstanceType<typeof SimplePeer>;
+  private _pendingOffers: Map<string, InstanceType<typeof SimplePeer>> = new Map();
   private _peers: Map<string, InstanceType<typeof SimplePeer>> = new Map();
   private _peerInfos: PeerInfo[] = [];
 
@@ -32,30 +33,37 @@ export class P2PRoom implements Room {
     this._onClose = opts.onClose;
   }
 
-  /** Generate offer URL. Host only. Returns promise resolving with the offer URL. */
-  offerUrl(): Promise<string> {
+  /** Generate an offer for a new peer. Host only. Returns { url, offerId }. */
+  offerUrl(): Promise<{ url: string; offerId: string }> {
     if (!this.isHost) return Promise.reject(new Error('Only host can generate offers'));
     return new Promise((resolve, reject) => {
+      const offerId = `offer-${++offerCounter}`;
       const peer = new SimplePeer({ initiator: true, trickle: false });
-      this._hostOfferPeer = peer;
+      this._pendingOffers.set(offerId, peer);
 
       peer.on('signal', (data: SignalData) => {
         const { url } = encodeSignal(data, this._baseUrl);
-        resolve(url);
+        resolve({ url, offerId });
       });
 
-      peer.on('connect', () => this._onPeerConnected(peer));
+      peer.on('connect', () => this._onPeerConnected(offerId, peer));
       peer.on('error', (err: Error) => {
+        this._pendingOffers.delete(offerId);
         this._onError?.(err);
         reject(err);
       });
     });
   }
 
-  /** Accept a peer's answer. Host only. */
-  acceptAnswer(signalUrl: string): void {
-    if (!this.isHost || !this._hostOfferPeer) {
-      this._onError?.(new Error('No pending connection'));
+  /** Accept a peer's answer for a specific offer. Host only. */
+  acceptAnswer(offerId: string, signalUrl: string): void {
+    if (!this.isHost) {
+      this._onError?.(new Error('Only host can accept answers'));
+      return;
+    }
+    const peer = this._pendingOffers.get(offerId);
+    if (!peer) {
+      this._onError?.(new Error(`No pending offer for ${offerId}`));
       return;
     }
     const data = decodeSignal(signalUrl);
@@ -63,7 +71,7 @@ export class P2PRoom implements Room {
       this._onError?.(new Error('Invalid answer URL'));
       return;
     }
-    this._hostOfferPeer.signal(data);
+    peer.signal(data);
   }
 
   /** Connect to host using offer URL. Peer only. Returns answer URL promise. */
@@ -81,10 +89,10 @@ export class P2PRoom implements Room {
       });
 
       peer.on('connect', () => {
-      peer.on('data', (data: Uint8Array) => {
-        this._onMessage?.(data, 'host');
+        peer.on('data', (data: Uint8Array) => {
+          this._onMessage?.(data, 'host');
+        });
       });
-    });
 
       peer.on('error', (err: Error) => {
         this._onError?.(err);
@@ -123,9 +131,10 @@ export class P2PRoom implements Room {
   }
 
   close(): void {
-    this._hostOfferPeer?.destroy();
+    for (const p of this._pendingOffers.values()) p.destroy();
     for (const p of this._peers.values()) p.destroy();
     this._peer?.destroy();
+    this._pendingOffers.clear();
     this._peers.clear();
     this._peerInfos = [];
     this._onClose?.();
@@ -133,13 +142,14 @@ export class P2PRoom implements Room {
 
   // ── Internal ──
 
-  private _onPeerConnected(peer: InstanceType<typeof SimplePeer>): void {
+  private _onPeerConnected(offerId: string, peer: InstanceType<typeof SimplePeer>): void {
     const peerId = `peer-${++peerCounter}`;
     this._peers.set(peerId, peer);
     this._peerInfos.push({
       id: peerId,
       send: (d: string | Uint8Array) => peer.send(d),
     });
+    this._pendingOffers.delete(offerId);
     this._onPeerJoin?.(peerId);
 
     peer.on('data', (data: Uint8Array) => {
@@ -151,7 +161,5 @@ export class P2PRoom implements Room {
       this._peerInfos = this._peerInfos.filter(p => p.id !== peerId);
       this._onPeerLeave?.(peerId);
     });
-
-    this._hostOfferPeer = undefined;
   }
 }
