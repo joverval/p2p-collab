@@ -226,15 +226,26 @@ async function createRoom() {
 
     // Create WebRTC offer
     log('system', 'Generating WebRTC offer...');
-    log('system', `createRoom type: ${typeof createRoom}, P2PRoom type: ${typeof P2PRoom}`);
-    let result: any;
-    try {
-      result = await createRoom(baseUrl);
-      log('system', `createRoom returned: ${JSON.stringify(Object.keys(result || {}))}`);
-    } catch (e: any) {
-      log('system', `ERROR: ${e?.message || e}${e?.stack ? ' — ' + e.stack.split('\\n')[0] : ''}`);
-      throw e;
-    }
+        log('system', `createRoom type: ${typeof createRoom}, P2PRoom type: ${typeof P2PRoom}`);
+    
+        // Direct test: try P2PRoom directly
+        try {
+          const testRoom = new P2PRoom(true, baseUrl);
+          log('system', `P2PRoom created: isHost=${testRoom.isHost}, type=${typeof testRoom}`);
+          const testUrl = await testRoom.offerUrl();
+          log('system', `offerUrl returned: ${testUrl?.substring(0, 40)}...`);
+        } catch (e: any) {
+          log('system', `DIRECT TEST ERROR: ${e?.message || e}`);
+        }
+    
+        let result: any;
+        try {
+          result = await createRoom(baseUrl);
+          log('system', `createRoom returned: ${JSON.stringify(Object.keys(result || {}))}`);
+        } catch (e: any) {
+          log('system', `ERROR: ${e?.message || e}`);
+          throw e;
+        }
     if (!result || !result.url || !result.room) {
       log('system', `ERROR: createRoom returned invalid result: ${JSON.stringify(result)}`);
       throw new Error('createRoom returned invalid data');
