@@ -225,7 +225,19 @@ async function createRoom() {
     log('system', `Room registered: ${roomId}`);
 
     // Create WebRTC offer
-    const { url, room: r } = await createRoom(baseUrl);
+    log('system', 'Generating WebRTC offer...');
+    let result: any;
+    try {
+      result = await createRoom(baseUrl);
+    } catch (e: any) {
+      log('system', `ERROR creating room: ${e?.message || e}`);
+      throw e;
+    }
+    if (!result || !result.url || !result.room) {
+      log('system', `ERROR: createRoom returned invalid result: ${JSON.stringify(result)}`);
+      throw new Error('createRoom returned invalid data');
+    }
+    const { url, room: r } = result;
     room = r;
 
     const sdpB64 = url.match(/#sdp=(.*)/)?.[1] || '';
