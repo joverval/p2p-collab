@@ -226,13 +226,13 @@ async function createRoom() {
 
     // Create WebRTC offer
     log('system', 'Generating WebRTC offer...');
-    log('system', `createRoom is: ${typeof createRoom}`);
+    log('system', `createRoom type: ${typeof createRoom}, P2PRoom type: ${typeof P2PRoom}`);
     let result: any;
     try {
       result = await createRoom(baseUrl);
       log('system', `createRoom returned: ${JSON.stringify(Object.keys(result || {}))}`);
     } catch (e: any) {
-      log('system', `ERROR creating room: ${e?.message || e}`);
+      log('system', `ERROR: ${e?.message || e}${e?.stack ? ' — ' + e.stack.split('\\n')[0] : ''}`);
       throw e;
     }
     if (!result || !result.url || !result.room) {
