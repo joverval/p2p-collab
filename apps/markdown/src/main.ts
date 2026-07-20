@@ -114,36 +114,42 @@ function updateTopBar() {
 // ── Pending Requests ──
 
 function addPendingRequest(email: string) {
-  $('pending-section').style.display = 'block';
-  const list = $('pending-list');
+  try {
+    $('pending-section').style.display = 'block';
+    const list = $('pending-list');
 
-  const item = el('div', { class: 'pending-item' }, [
-    el('span', {}, [`🔔 ${email} wants to join`]),
-    el('div', { class: 'btn-row' }, [
-      el('button', {}, ['Approve']),
-      el('button', { class: 'reject-btn' }, ['Reject']),
-    ]),
-  ]);
+    const item = el('div', { class: 'pending-item' }, [
+      el('span', {}, [`🔔 ${email} wants to join`]),
+      el('div', { class: 'btn-row' }, [
+        el('button', {}, ['Approve']),
+        el('button', { class: 'reject-btn' }, ['Reject']),
+      ]),
+    ]);
 
-  const [approveBtn, rejectBtn] = item.querySelectorAll('button');
+    const [approveBtn, rejectBtn] = item.querySelectorAll('button');
 
-  approveBtn.addEventListener('click', () => {
-    ws!.send(JSON.stringify({ type: 'host-approve', email }));
-    item.remove();
-    if ($('pending-list').children.length === 0) {
-      $('pending-section').style.display = 'none';
-    }
-  });
+    approveBtn.addEventListener('click', () => {
+      if (!ws) { log('system', 'ERROR: WS disconnected'); return; }
+      ws.send(JSON.stringify({ type: 'host-approve', email }));
+      item.remove();
+      if ($('pending-list').children.length === 0) {
+        $('pending-section').style.display = 'none';
+      }
+    });
 
-  rejectBtn.addEventListener('click', () => {
-    ws!.send(JSON.stringify({ type: 'host-reject', email }));
-    item.remove();
-    if ($('pending-list').children.length === 0) {
-      $('pending-section').style.display = 'none';
-    }
-  });
+    rejectBtn.addEventListener('click', () => {
+      if (!ws) { log('system', 'ERROR: WS disconnected'); return; }
+      ws.send(JSON.stringify({ type: 'host-reject', email }));
+      item.remove();
+      if ($('pending-list').children.length === 0) {
+        $('pending-section').style.display = 'none';
+      }
+    });
 
-  list.appendChild(item);
+    list.appendChild(item);
+  } catch (e: any) {
+    log('system', `ERROR showing pending request: ${e?.message || e}`);
+  }
 }
 
 // ── CodeMirror editor ──
@@ -368,7 +374,7 @@ async function peerAutoJoin(roomId: string, offerB64: string) {
     };
 
     // Room message handling
-    r.onMessage((data: string | Uint8Array, peerId: string) => {
+    room!.onMessage((data: string | Uint8Array, peerId: string) => {
       if (!(data instanceof Uint8Array)) return;
       const decoded = decodeMessage(data);
       if (decoded.type === 'yjs') {
