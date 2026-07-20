@@ -113,7 +113,7 @@ function updateTopBar() {
 
 // ── Pending Requests ──
 
-function addPendingRequest(email: string, answerB64: string) {
+function addPendingRequest(email: string) {
   $('pending-section').style.display = 'block';
   const list = $('pending-list');
 
@@ -252,8 +252,7 @@ async function createRoom() {
       const msg = JSON.parse(e.data);
       if (msg.type === 'peer-request') {
         log('system', `📩 ${msg.email} wants to join`);
-        // Store pending — when approved, the answer arrives via 'answer' event
-        _pendingEmail = msg.email;
+        addPendingRequest(msg.email);
       } else if (msg.type === 'answer') {
         log('system', `✅ ${msg.email || 'Peer'} approved — applying answer`);
         room!.acceptAnswer(`#sdp=${msg.answerB64}`);
@@ -282,11 +281,10 @@ async function createRoom() {
 
     r.onPeerJoin((peerId: string) => {
       connected = true;
-      const email = _pendingEmail || peerId;
-      connectedUsers.push(email);
+      connectedUsers.push('Peer');
       setStatus('connected', `connected (${connectedUsers.length} peer(s))`);
       updateTopBar();
-      log('system', `🎉 ${email} connected!`);
+      log('system', '🎉 Peer connected!');
       if (!editorView) initEditor();
       if (ydoc) room!.send(encodeYjs(Y.encodeStateAsUpdate(ydoc)));
     });
