@@ -155,6 +155,7 @@ function addPendingRequest(email: string) {
 // ── CodeMirror editor ──
 
 function initEditor() {
+  log('system', 'initEditor called');
   const editorEl = $('editor');
   $('editor-section').style.display = 'flex';
 
@@ -260,8 +261,9 @@ async function createRoom() {
         log('system', `📩 ${msg.email} wants to join`);
         addPendingRequest(msg.email);
       } else if (msg.type === 'answer') {
-        log('system', `✅ ${msg.email || 'Peer'} approved — applying answer`);
+        log('system', `✅ ${msg.email || 'Peer'} approved — applying answer...`);
         room!.acceptAnswer(`#sdp=${msg.answerB64}`);
+        log('system', 'Answer applied, waiting for connection...');
       }
     };
 
@@ -286,12 +288,13 @@ async function createRoom() {
     });
 
     r.onPeerJoin((peerId: string) => {
+      log('system', 'onPeerJoin fired!');
       connected = true;
       connectedUsers.push('Peer');
       setStatus('connected', `connected (${connectedUsers.length} peer(s))`);
       updateTopBar();
       log('system', '🎉 Peer connected!');
-      if (!editorView) initEditor();
+      if (!editorView) { log('system', 'Calling initEditor from onPeerJoin...'); initEditor(); }
       if (ydoc) room!.send(encodeYjs(Y.encodeStateAsUpdate(ydoc)));
     });
 
