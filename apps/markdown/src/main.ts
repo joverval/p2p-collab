@@ -1,4 +1,4 @@
-import { createRoom, joinRoom, P2PRoom } from '../../../dist/index.js';
+import { P2PRoom } from '../../../dist/index.js';
 import type { Room } from '../../../dist/index.js';
 import './style.css';
 
@@ -226,32 +226,11 @@ async function createRoom() {
 
     // Create WebRTC offer
     log('system', 'Generating WebRTC offer...');
-        log('system', `createRoom type: ${typeof createRoom}, P2PRoom type: ${typeof P2PRoom}`);
-    
-        // Direct test: try P2PRoom directly
-        try {
-          const testRoom = new P2PRoom(true, baseUrl);
-          log('system', `P2PRoom created: isHost=${testRoom.isHost}, type=${typeof testRoom}`);
-          const testUrl = await testRoom.offerUrl();
-          log('system', `offerUrl returned: ${testUrl?.substring(0, 40)}...`);
-        } catch (e: any) {
-          log('system', `DIRECT TEST ERROR: ${e?.message || e}`);
-        }
-    
-        let result: any;
-        try {
-          result = await createRoom(baseUrl);
-          log('system', `createRoom returned: ${JSON.stringify(Object.keys(result || {}))}`);
-        } catch (e: any) {
-          log('system', `ERROR: ${e?.message || e}`);
-          throw e;
-        }
-    if (!result || !result.url || !result.room) {
-      log('system', `ERROR: createRoom returned invalid result: ${JSON.stringify(result)}`);
-      throw new Error('createRoom returned invalid data');
-    }
-    const { url, room: r } = result;
-    room = r;
+
+        // Use P2PRoom directly (createRoom wrapper is broken by Vite module transform)
+        const r = new P2PRoom(true, baseUrl);
+        const url = await r.offerUrl();
+        room = r;
 
     const sdpB64 = url.match(/#sdp=(.*)/)?.[1] || '';
     const shareUrl = `${baseUrl}#room=${roomId}&sdp=${encodeURIComponent(sdpB64)}`;
@@ -352,10 +331,10 @@ async function peerAutoJoin(roomId: string, offerB64: string) {
   try {
     await wsConnect();
 
-    // Join room
-    const offerUrl = `${baseUrl}#sdp=${offerB64}`;
-    const { room: r, answerUrl } = await joinRoom(offerUrl, baseUrl);
-    room = r;
+    // Join room (use P2PRoom directly — joinRoom wrapper broken by Vite)
+    const peer = new P2PRoom(false, baseUrl);
+    const answerUrl = await peer.connectToHost(`${baseUrl}#sdp=${offerB64}`);
+    room = peer;
 
     const match = answerUrl.match(/#sdp=(.*)/);
     const answerB64 = match ? match[1] : '';
