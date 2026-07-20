@@ -226,9 +226,11 @@ async function createRoom() {
 
     // Create WebRTC offer
     log('system', 'Generating WebRTC offer...');
+    log('system', `createRoom is: ${typeof createRoom}`);
     let result: any;
     try {
       result = await createRoom(baseUrl);
+      log('system', `createRoom returned: ${JSON.stringify(Object.keys(result || {}))}`);
     } catch (e: any) {
       log('system', `ERROR creating room: ${e?.message || e}`);
       throw e;

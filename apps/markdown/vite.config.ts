@@ -9,4 +9,7 @@ export default defineConfig({
       'simple-peer': path.resolve(__dirname, 'vendor/simple-peer.js'),
     },
   },
+  optimizeDeps: {
+    exclude: ['simple-peer'],
+  },
 });
