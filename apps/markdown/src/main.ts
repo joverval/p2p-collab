@@ -1,5 +1,5 @@
-import { createRoom, joinRoom, P2PRoom } from '@joverval/p2p-collab';
-import type { Room } from '@joverval/p2p-collab';
+import { createRoom, joinRoom, P2PRoom } from '../../../dist/index.js';
+import type { Room } from '../../../dist/index.js';
 import './style.css';
 
 import * as Y from 'yjs';
