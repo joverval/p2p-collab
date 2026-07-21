@@ -1,6 +1,7 @@
 {
   "name": "@joverval/p2p-collab",
   "version": "0.1.0",
+  "description": "Browser-to-browser P2P collaboration library using WebRTC data channels and URL-encoded SDP signaling. No servers required.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -12,16 +13,35 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "webrtc",
+    "p2p",
+    "peer-to-peer",
+    "collaboration",
+    "data-channel",
+    "simple-peer",
+    "browser",
+    "typescript"
+  ],
+  "author": "Joaquín Vergara",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joverval/p2p-collab"
+  },
   "dependencies": {
     "simple-peer": "^9.11.1"
   },
