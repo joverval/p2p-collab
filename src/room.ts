@@ -2,6 +2,14 @@ import SimplePeer from 'simple-peer';
 import { encodeSignal, decodeSignal } from './signal';
 import type { Room, RoomOptions, PeerInfo, SignalData } from './types';
 
+// STUN servers for NAT traversal (no TURN — P2P only)
+const ICE_SERVERS: RTCConfiguration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+};
+
 let peerCounter = 0;
 let offerCounter = 0;
 
@@ -38,7 +46,7 @@ export class P2PRoom implements Room {
     if (!this.isHost) return Promise.reject(new Error('Only host can generate offers'));
     return new Promise((resolve, reject) => {
       const offerId = `offer-${++offerCounter}`;
-      const peer = new SimplePeer({ initiator: true, trickle: false });
+      const peer = new SimplePeer({ initiator: true, trickle: false, config: ICE_SERVERS });
       this._pendingOffers.set(offerId, peer);
 
       peer.on('signal', (data: SignalData) => {
@@ -81,7 +89,7 @@ export class P2PRoom implements Room {
     if (!signalData) return Promise.reject(new Error('Invalid offer URL'));
 
     return new Promise((resolve, reject) => {
-      const peer = new SimplePeer({ initiator: false, trickle: false });
+      const peer = new SimplePeer({ initiator: false, trickle: false, config: ICE_SERVERS });
 
       peer.on('signal', (data: SignalData) => {
         const { url } = encodeSignal(data, this._baseUrl);
