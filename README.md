@@ -14,7 +14,7 @@ For local development with a sibling project:
 # In your app's package.json
 "@joverval/p2p-collab": "file:../p2p-collab"
 
-# In your vite.config.ts (if using Vite)
+# In your vite.config.ts
 resolve: {
   alias: {
     '@joverval/p2p-collab': path.resolve(__dirname, '../p2p-collab/dist/index.js'),
@@ -22,7 +22,7 @@ resolve: {
 },
 ```
 
-> **Note for Vite users:** The `file:` dependency alone creates a symlink that Vite's bundler (Rolldown) may not resolve correctly during builds. The `resolve.alias` in `vite.config.ts` is required for production builds. During development (`vite dev`), the symlink is sufficient.
+> **Note for Vite users:** The `file:` dependency alone creates a symlink that Vite may not resolve correctly during builds. The `resolve.alias` is required for production builds.
 
 ## Quick Start
 
@@ -44,11 +44,9 @@ const answerUrl = await peer.connectToHost(offerUrl);
 
 ### `new P2PRoom(isHost, baseUrl, options?)`
 
-Creates a room instance.
-
-- `isHost: boolean` — `true` for the host, `false` for a peer
-- `baseUrl: string` — Base URL for SDP encoding (e.g., `'http://localhost:8080'`)
-- `options?: RoomOptions` — Optional callbacks:
+- `isHost: boolean`
+- `baseUrl: string` — Base URL for SDP encoding
+- `options?: RoomOptions`
   - `onPeerLeave?: (peerId: string) => void`
   - `onError?: (err: Error) => void`
   - `onClose?: () => void`
@@ -57,21 +55,11 @@ Creates a room instance.
 
 #### `room.offerUrl() → Promise<{ url: string, offerId: string }>`
 
-Generates a WebRTC offer and returns a shareable URL. The URL contains the SDP offer encoded in the fragment (`#sdp=<base64>`). Each call generates a new offer for a different peer.
-
-```typescript
-const { url, offerId } = await room.offerUrl();
-// url: "http://localhost:8080/#sdp=eyJ0eXBlIjoib2ZmZX..."
-// offerId: "offer-1"
-```
+Generates a WebRTC offer. Returns a shareable URL with the SDP encoded in `#sdp=<base64>`. Each call creates a fresh offer for a new peer — supports multiple simultaneous peers.
 
 #### `room.acceptAnswer(offerId: string, signalUrl: string)`
 
-Accepts a peer's answer for a specific offer.
-
-```typescript
-room.acceptAnswer('offer-1', '#sdp=eyJ0eXBlIjoiYW5zd2Vy...');
-```
+Accepts a peer's answer for a specific offer ID.
 
 ### Peer Methods
 
@@ -79,88 +67,49 @@ room.acceptAnswer('offer-1', '#sdp=eyJ0eXBlIjoiYW5zd2Vy...');
 
 Connects to a host using their offer URL. Returns the answer URL to deliver back to the host.
 
-```typescript
-const answerUrl = await peer.connectToHost(hostOfferUrl);
-// Deliver answerUrl to the host via any out-of-band channel
-```
-
 ### Shared Methods
 
 #### `room.send(data: string | Uint8Array)`
 
-Sends data. On the host, broadcasts to **all** connected peers. On a peer, sends only to the host.
+Host: broadcasts to all connected peers. Peer: sends only to the host.
 
-```typescript
-room.send('hello');
-room.send(new Uint8Array([1, 2, 3]));
-```
-
-#### `room.onMessage(handler)`
+#### `room.onMessage(handler: (data: string | Uint8Array, peerId: string) => void)`
 
 Receives data from peers (host) or the host (peer).
 
-```typescript
-room.onMessage((data, peerId) => {
-  // data: string | Uint8Array
-  // peerId: "peer-1", "peer-2", ... or "host"
-});
-```
-
-#### `room.onPeerJoin(handler)`
+#### `room.onPeerJoin(handler: (peerId: string) => void)`
 
 Called when a new peer connects (host only).
 
-```typescript
-room.onPeerJoin((peerId) => {
-  console.log(`Peer ${peerId} connected`);
-});
-```
-
-#### `room.peers`
-
-Array of currently connected peers. Each entry: `{ id: string, send: (data) => void }`.
-
 #### `room.close()`
 
-Closes all connections and cleans up.
+Closes all connections.
 
-### Properties
+## ICE Configuration
 
-- `room.isHost: boolean`
-- `room.peers: PeerInfo[]`
+Google STUN servers are configured by default for NAT traversal:
+
+```typescript
+iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+]
+```
+
+No TURN server — connections are direct P2P.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────┐
-│           Your App                    │
-│  (Yjs, chat, file editing, etc.)     │
-├──────────────────────────────────────┤
-│         p2p-collab                    │
-│  ┌──────────┐ ┌────────────────────┐ │
-│  │ Signaling│ │ WebRTC (simple-peer)│ │
-│  │ URL SDP  │ │ Host-star topology  │ │
-│  └──────────┘ └────────────────────┘ │
-├──────────────────────────────────────┤
-│         Browser APIs                  │
-│  RTCPeerConnection, DataChannel       │
-└──────────────────────────────────────┘
+Host (⭐)
+  ├── Peer 1 (WebRTC data channel)
+  ├── Peer 2 (WebRTC data channel)
+  └── Peer N (WebRTC data channel)
 ```
 
-**Signaling:** SDP offers and answers are base64-encoded into URL fragments (`#sdp=...`). No signaling server needed — URLs can be shared via any channel (messaging apps, QR codes, email, copy-paste).
+**Signaling:** SDP offers/answers base64-encoded in URL fragments (`#sdp=...`). No server needed.
 
-**Topology:** Host-star. One host maintains separate WebRTC connections to each peer. Messages from the host are broadcast to all peers. Messages from peers are sent to the host (which can relay them to other peers).
-
-**Multi-peer:** The host can generate multiple offers (each with a unique `offerId`) to accept multiple peers. Each new `offerUrl()` call creates a fresh offer for a new peer.
-
-## Development
-
-```bash
-npm install
-npm run build    # Build with tsup (CJS + ESM)
-npm test         # Run 22 unit tests (vitest)
-npm run dev      # Watch mode
-```
+**Topology:** Host-star. One host, multiple peers. Host broadcasts all messages to all peers. Peers send only to host.
 
 ## License
 
