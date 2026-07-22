@@ -138,6 +138,19 @@ export class P2PRoom implements Room {
     }
   }
 
+  sendToPeer(peerId: string, data: string | Uint8Array): void {
+    if (!this.isHost) return;
+    const peer = this._peers.get(peerId);
+    if (peer) peer.send(data);
+  }
+
+  broadcastExcept(data: string | Uint8Array, excludedPeerId?: string): void {
+    if (!this.isHost) return;
+    for (const [id, peer] of this._peers) {
+      if (id !== excludedPeerId) peer.send(data);
+    }
+  }
+
   onMessage(handler: (data: string | Uint8Array, peerId: string) => void): void {
     this._onMessage = handler;
   }
