@@ -13,6 +13,9 @@ export interface PeerInfo {
 
 // ---- Public API ----
 export interface RoomOptions {
+  rtcConfig?: RTCConfiguration;
+  onConnect?: () => void;
+  onPeerConnect?: (peerId: string) => void;
   onPeerLeave?: (peerId: string) => void;
   onError?: (err: Error) => void;
   onClose?: () => void;

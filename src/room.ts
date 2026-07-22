@@ -2,14 +2,13 @@ import SimplePeer from 'simple-peer';
 import { encodeSignal, decodeSignal } from './signal';
 import type { Room, RoomOptions, PeerInfo, SignalData } from './types';
 
-// ICE servers (3 STUN providers — more slows discovery)
-const ICE_SERVERS: RTCConfiguration = {
+const DEFAULT_ICE_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    { urls: 'stun:stun.1und1.de:3478' },
   ],
   iceCandidatePoolSize: 2,
+  iceTransportPolicy: 'all' as RTCIceTransportPolicy,
 };
 
 let peerCounter = 0;
@@ -29,15 +28,21 @@ export class P2PRoom implements Room {
   // Handlers
   private _onMessage?: (data: string | Uint8Array, peerId: string) => void;
   private _onPeerJoin?: (peerId: string) => void;
+  private readonly _onPeerConnect?: (peerId: string) => void;
   private readonly _onPeerLeave?: (peerId: string) => void;
+  private readonly _onConnect?: () => void;
   private readonly _onError?: (err: Error) => void;
   private readonly _onClose?: () => void;
 
   private readonly _baseUrl: string;
+  private readonly _rtcConfig: RTCConfiguration;
 
   constructor(isHost: boolean, baseUrl: string, opts: RoomOptions = {}) {
     this.isHost = isHost;
     this._baseUrl = baseUrl;
+    this._rtcConfig = opts.rtcConfig || DEFAULT_ICE_CONFIG;
+    this._onConnect = opts.onConnect;
+    this._onPeerConnect = opts.onPeerConnect;
     this._onPeerLeave = opts.onPeerLeave;
     this._onError = opts.onError;
     this._onClose = opts.onClose;
@@ -48,7 +53,7 @@ export class P2PRoom implements Room {
     if (!this.isHost) return Promise.reject(new Error('Only host can generate offers'));
     return new Promise((resolve, reject) => {
       const offerId = `offer-${++offerCounter}`;
-      const peer = new SimplePeer({ initiator: true, trickle: false, config: ICE_SERVERS });
+      const peer = new SimplePeer({ initiator: true, trickle: false, config: this._rtcConfig });
       this._pendingOffers.set(offerId, peer);
 
       peer.on('signal', (data: SignalData) => {
@@ -91,7 +96,7 @@ export class P2PRoom implements Room {
     if (!signalData) return Promise.reject(new Error('Invalid offer URL'));
 
     return new Promise((resolve, reject) => {
-      const peer = new SimplePeer({ initiator: false, trickle: false, config: ICE_SERVERS });
+      const peer = new SimplePeer({ initiator: false, trickle: false, config: this._rtcConfig });
 
       peer.on('signal', (data: SignalData) => {
         const { url } = encodeSignal(data, this._baseUrl);
@@ -102,6 +107,7 @@ export class P2PRoom implements Room {
         peer.on('data', (data: Uint8Array) => {
           this._onMessage?.(data, 'host');
         });
+        this._onConnect?.();
       });
 
       peer.on('error', (err: Error) => {
@@ -161,6 +167,7 @@ export class P2PRoom implements Room {
     });
     this._pendingOffers.delete(offerId);
     this._onPeerJoin?.(peerId);
+    this._onPeerConnect?.(peerId);
 
     peer.on('data', (data: Uint8Array) => {
       this._onMessage?.(data, peerId);
