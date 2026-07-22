@@ -2,11 +2,10 @@ import SimplePeer from 'simple-peer';
 import { encodeSignal, decodeSignal } from './signal';
 import type { Room, RoomOptions, PeerInfo, SignalData } from './types';
 
-// ICE servers (multiple STUN providers for better P2P reach)
+// ICE servers (3 STUN providers — more slows discovery)
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:stun.1und1.de:3478' },
   ],
