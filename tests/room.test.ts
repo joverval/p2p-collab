@@ -631,6 +631,27 @@ describe('P2PRoom', () => {
       })();
       await p3; // should not throw
     });
+
+    it('offer auto-expires after 5 minutes', async () => {
+      vi.useFakeTimers();
+      const room = new P2PRoom(true, 'http://localhost');
+      const offerPromise = room.offerUrl();
+      setTimeout(() => {
+        mockPeerEvents[0]?.get('signal')?.({ type: 'offer', sdp: 'x' });
+      }, 5);
+      vi.advanceTimersByTime(10);
+      const { offerId } = await offerPromise;
+
+      expect((room as any)._pendingOffers.has(offerId)).toBe(true);
+
+      // Advance past the 5-minute expiry
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+
+      expect((room as any)._pendingOffers.has(offerId)).toBe(false);
+      expect((room as any)._offerTimers.has(offerId)).toBe(false);
+
+      vi.useRealTimers();
+    });
   });
 
   // ── applySignal ──
@@ -824,6 +845,32 @@ describe('P2PRoom', () => {
       // peer-2: already has 4 bytes, 4 more = 8 > 5 → rejected
       const r2 = room.sendToPeer('peer-2', 'abcd');
       expect(r2.status).toBe('rejected');
+    });
+
+    it('queue maintains FIFO ordering when flushed', () => {
+      const room = new P2PRoom(true, '');
+      const p = mockPeer();
+      const state = {
+        peer: p, peerId: 'peer-1',
+        queue: [
+          { data: 'first', byteLength: 5 },
+          { data: 'second', byteLength: 6 },
+          { data: 'third', byteLength: 5 },
+        ],
+        queuedBytes: 16, draining: false, connected: false,
+      };
+      (room as any)._sendStates.set('peer-1', state);
+
+      // Connect and flush
+      state.connected = true;
+      (room as any)._flushQueue(state);
+
+      expect(state.queue.length).toBe(0);
+      expect(state.queuedBytes).toBe(0);
+      expect(p.write).toHaveBeenCalledTimes(3);
+      expect(p.write).toHaveBeenNthCalledWith(1, 'first');
+      expect(p.write).toHaveBeenNthCalledWith(2, 'second');
+      expect(p.write).toHaveBeenNthCalledWith(3, 'third');
     });
 
     it('queue cleared on peer disconnect', () => {

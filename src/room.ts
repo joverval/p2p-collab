@@ -280,6 +280,10 @@ export class P2PRoom implements Room {
       });
 
       peer.on('close', () => {
+        // Detach listeners to prevent stale callbacks after close
+        (peer as any).removeAllListeners('data');
+        (peer as any).removeAllListeners('close');
+
         if (this._hostSendState) {
           (this._hostSendState.peer as any).removeAllListeners('drain');
           this._hostSendState.queue = [];
@@ -538,7 +542,7 @@ export class P2PRoom implements Room {
     }
   }
 
-  private _onPeerConnected(offerId: string, peer: InstanceType<typeof SimplePeer>): void {
+  private async _onPeerConnected(offerId: string, peer: InstanceType<typeof SimplePeer>): Promise<void> {
     const peerId = uuid();
     this._attachStateCallbacks(peer, peerId);
     this._peers.set(peerId, peer);
@@ -550,7 +554,8 @@ export class P2PRoom implements Room {
     this._pendingOffers.delete(offerId);
     const timer = this._offerTimers.get(offerId);
     if (timer) { clearTimeout(timer); this._offerTimers.delete(offerId); }
-    this._onPeerJoin?.(peerId);
+    // Await onPeerJoin so the handler can create next offer before we mark this peer as fully connected
+    await this._onPeerJoin?.(peerId);
     this._onPeerConnect?.(peerId);
 
     // Initialize send state for this peer
@@ -571,6 +576,13 @@ export class P2PRoom implements Room {
     });
 
     peer.on('close', () => {
+      // Guard against duplicate close events
+      if (!this._peers.has(peerId)) return;
+
+      // Detach listeners to prevent stale callbacks after close
+      (peer as any).removeAllListeners('data');
+      (peer as any).removeAllListeners('close');
+
       // Clean up send state
       const st = this._sendStates.get(peerId);
       if (st) {

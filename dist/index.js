@@ -258,6 +258,8 @@ var P2PRoom = class {
         reject(err);
       });
       peer.on("close", () => {
+        peer.removeAllListeners("data");
+        peer.removeAllListeners("close");
         if (this._hostSendState) {
           this._hostSendState.peer.removeAllListeners("drain");
           this._hostSendState.queue = [];
@@ -476,7 +478,7 @@ var P2PRoom = class {
       }
     }
   }
-  _onPeerConnected(offerId, peer) {
+  async _onPeerConnected(offerId, peer) {
     const peerId = uuid();
     this._attachStateCallbacks(peer, peerId);
     this._peers.set(peerId, peer);
@@ -491,7 +493,7 @@ var P2PRoom = class {
       clearTimeout(timer);
       this._offerTimers.delete(offerId);
     }
-    this._onPeerJoin?.(peerId);
+    await this._onPeerJoin?.(peerId);
     this._onPeerConnect?.(peerId);
     const sendState = {
       peer,
@@ -508,6 +510,9 @@ var P2PRoom = class {
       this._onMessage?.(data, peerId);
     });
     peer.on("close", () => {
+      if (!this._peers.has(peerId)) return;
+      peer.removeAllListeners("data");
+      peer.removeAllListeners("close");
       const st = this._sendStates.get(peerId);
       if (st) {
         st.peer.removeAllListeners("drain");

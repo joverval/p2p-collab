@@ -47,9 +47,19 @@ const answerUrl = await peer.connectToHost(offerUrl);
 - `isHost: boolean`
 - `baseUrl: string` — Base URL for SDP encoding
 - `options?: RoomOptions`
+  - `rtcConfig?: RTCConfiguration` — Custom ICE server configuration
+  - `trickle?: boolean` — Enable trickle ICE (default: `false`)
+  - `iceMode?: IceMode` — `'stun-only'` (no TURN), `'all'` (STUN+TURN), or `'turn-only'` (relay only)
+  - `maxPendingOffers?: number` — Max simultaneous pending offers (default: 50)
+  - `maxQueuedBytes?: number` — Max bytes queued per peer before rejection (default: 256 KB)
+  - `onConnect?: () => void`
+  - `onPeerConnect?: (peerId: string) => void`
   - `onPeerLeave?: (peerId: string) => void`
   - `onError?: (err: Error) => void`
   - `onClose?: () => void`
+  - `onConnectionStateChange?: (state: RTCPeerConnectionState, peerId?: string) => void`
+  - `onIceConnectionStateChange?: (state: RTCIceConnectionState, peerId?: string) => void`
+  - `onSignal?: (data: SignalData) => void` — Called for trickle ICE signals
 
 ### Host Methods
 
@@ -69,17 +79,17 @@ Connects to a host using their offer URL. Returns the answer URL to deliver back
 
 ### Shared Methods
 
-#### `room.send(data: string | Uint8Array): boolean`
+#### `room.send(data: string | Uint8Array): SendResult`
 
-Host: broadcasts to all connected peers. Peer: sends only to the host. Returns `true` if at least one peer (host mode) or the host (peer mode) received the data.
+Host: broadcasts to all connected peers. Peer: sends only to the host. Returns `{ status, bufferedAmount? }` — `status` is `'accepted'` (sent immediately), `'queued'` (buffered for later delivery), or `'rejected'` (no peers, queue full, or not connected).
 
-#### `room.sendToPeer(peerId: string, data: string | Uint8Array): boolean`
+#### `room.sendToPeer(peerId: string, data: string | Uint8Array): SendResult`
 
-Host only: sends data to a specific peer by ID. Returns `true` if the peer is connected and received the data.
+Host only: sends data to a specific peer by ID. Returns `{ status, bufferedAmount? }` — same semantics as `send()`.
 
 #### `room.broadcastExcept(data: string | Uint8Array, excludedPeerId?: string): BroadcastResult`
 
-Host only: broadcasts to all connected peers except the specified one. Returns `{ accepted: number, total: number }` indicating how many peers received the data out of the total targeted.
+Host only: broadcasts to all connected peers except the specified one. Returns `{ accepted, queued, rejected, total }` — counts of peers by delivery status.
 
 #### `room.onMessage(handler: (data: string | Uint8Array, peerId: string) => void)`
 
@@ -98,6 +108,10 @@ Closes all connections.
 #### `room.cancelOffer(offerId: string): void`
 
 Cancels a pending offer and destroys its peer connection. Use when a generated offer is no longer needed.
+
+#### `room.applySignal(connectionId: string, signal: SignalData): void`
+
+Feeds a trickle ICE signal to a specific connection. Host: `connectionId` is the peer or offer ID. Peer: `connectionId` must be `'host'`.
 
 ### Diagnostics
 
@@ -119,6 +133,9 @@ Returns the current ICE connection state for a specific peer (host) or the host 
 |-----------------------------|-----------------------------------------------------|--------------------------------------------------|
 | `rtcConfig`                 | `RTCConfiguration`                                  | Custom ICE server configuration                  |
 | `trickle`                   | `boolean`                                           | Enable trickle ICE (default: `false`)             |
+| `iceMode`                   | `IceMode`                                           | ICE policy: `'stun-only'`, `'all'`, `'turn-only'`|
+| `maxPendingOffers`          | `number`                                            | Max pending offers (default: 50)                 |
+| `maxQueuedBytes`            | `number`                                            | Max queued bytes per peer (default: 256 KB)      |
 | `onConnect`                 | `() => void`                                        | Called when peer connects to host                |
 | `onPeerConnect`             | `(peerId: string) => void`                          | Called when a specific peer connects (host only) |
 | `onPeerLeave`               | `(peerId: string) => void`                          | Called when a peer disconnects                   |
@@ -160,7 +177,7 @@ const room = new P2PRoom(true, 'http://localhost', {
 });
 ```
 
-> **Note:** `IceMode` configuration is planned for a future release. For now, control ICE behavior via the `rtcConfig.iceTransportPolicy` option.
+> **Note:** Use `IceMode` to control ICE behavior. `'stun-only'` strips TURN servers (default safe mode), `'all'` allows STUN+TURN, and `'turn-only'` forces relay. You can also control behavior via `rtcConfig.iceTransportPolicy`.
 
 ## Architecture
 
