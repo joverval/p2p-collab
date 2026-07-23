@@ -87,16 +87,54 @@ Closes all connections.
 
 ## ICE Configuration
 
-Google STUN servers are configured by default for NAT traversal:
+Default is **STUN-only** -- no TURN servers included. Two public Google/Cloudflare STUN servers are configured for NAT traversal:
 
 ```typescript
 iceServers: [
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
 ]
 ```
 
-No TURN server — connections are direct P2P.
+### Adding TURN
+
+TURN is **application-provided** via the `rtcConfig` option. To use TURN as a fallback:
+
+```typescript
+const room = new P2PRoom(true, 'http://localhost', {
+  rtcConfig: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      {
+        urls: 'turn:your-turn-server:3478',
+        username: 'username',
+        credential: 'credential',
+      },
+    ],
+    iceTransportPolicy: 'all', // prefers direct, falls back to relay
+  },
+});
+```
+
+### IceMode values for testing
+
+| Mode        | ICE servers    | Policy  | Use case             |
+|-------------|----------------|---------|----------------------|
+| `stun-only` | STUN only      | `all`   | Default, direct P2P  |
+| `all`       | STUN + TURN    | `all`   | Production fallback  |
+| `turn-only` | TURN only      | `relay` | Testing/troubleshooting |
+
+### Connection route detection
+
+Inspect the selected ICE candidate pair at runtime:
+
+```typescript
+const route = await room.getConnectionRoute(peerId);
+// { kind: 'direct' | 'turn' | 'unknown', localCandidateType, remoteCandidateType, protocol }
+```
+
+Available callbacks: `onConnectionStateChange` and `onIceConnectionStateChange`.
 
 ## Architecture
 
