@@ -69,9 +69,17 @@ Connects to a host using their offer URL. Returns the answer URL to deliver back
 
 ### Shared Methods
 
-#### `room.send(data: string | Uint8Array)`
+#### `room.send(data: string | Uint8Array): boolean`
 
-Host: broadcasts to all connected peers. Peer: sends only to the host.
+Host: broadcasts to all connected peers. Peer: sends only to the host. Returns `true` if at least one peer (host mode) or the host (peer mode) received the data.
+
+#### `room.sendToPeer(peerId: string, data: string | Uint8Array): boolean`
+
+Host only: sends data to a specific peer by ID. Returns `true` if the peer is connected and received the data.
+
+#### `room.broadcastExcept(data: string | Uint8Array, excludedPeerId?: string): BroadcastResult`
+
+Host only: broadcasts to all connected peers except the specified one. Returns `{ accepted: number, total: number }` indicating how many peers received the data out of the total targeted.
 
 #### `room.onMessage(handler: (data: string | Uint8Array, peerId: string) => void)`
 
@@ -84,6 +92,41 @@ Called when a new peer connects (host only).
 #### `room.close()`
 
 Closes all connections.
+
+### Host-Only Methods
+
+#### `room.cancelOffer(offerId: string): void`
+
+Cancels a pending offer and destroys its peer connection. Use when a generated offer is no longer needed.
+
+### Diagnostics
+
+#### `room.getConnectionRoute(peerId?: string): Promise<ConnectionRoute>`
+
+Inspect the selected ICE candidate pair at runtime. Returns connection metadata including whether the route is direct or relayed via TURN.
+
+#### `room.getConnectionState(peerId?: string): RTCPeerConnectionState | 'unknown'`
+
+Returns the current RTCPeerConnection state for a specific peer (host) or the host connection (peer).
+
+#### `room.getIceConnectionState(peerId?: string): RTCIceConnectionState | 'unknown'`
+
+Returns the current ICE connection state for a specific peer (host) or the host connection (peer).
+
+### `RoomOptions` Reference
+
+| Option                      | Type                                                | Description                                      |
+|-----------------------------|-----------------------------------------------------|--------------------------------------------------|
+| `rtcConfig`                 | `RTCConfiguration`                                  | Custom ICE server configuration                  |
+| `trickle`                   | `boolean`                                           | Enable trickle ICE (default: `false`)             |
+| `onConnect`                 | `() => void`                                        | Called when peer connects to host                |
+| `onPeerConnect`             | `(peerId: string) => void`                          | Called when a specific peer connects (host only) |
+| `onPeerLeave`               | `(peerId: string) => void`                          | Called when a peer disconnects                   |
+| `onError`                   | `(err: Error) => void`                              | Called on errors                                 |
+| `onClose`                   | `() => void`                                        | Called when connection closes                    |
+| `onConnectionStateChange`   | `(state: RTCPeerConnectionState, peerId?: string) => void` | Called on RTCPeerConnection state change   |
+| `onIceConnectionStateChange`| `(state: RTCIceConnectionState, peerId?: string) => void` | Called on ICE connection state change     |
+| `onSignal`                  | `(data: SignalData) => void`                        | Called for trickle ICE signals                   |
 
 ## ICE Configuration
 
@@ -117,24 +160,7 @@ const room = new P2PRoom(true, 'http://localhost', {
 });
 ```
 
-### IceMode values for testing
-
-| Mode        | ICE servers    | Policy  | Use case             |
-|-------------|----------------|---------|----------------------|
-| `stun-only` | STUN only      | `all`   | Default, direct P2P  |
-| `all`       | STUN + TURN    | `all`   | Production fallback  |
-| `turn-only` | TURN only      | `relay` | Testing/troubleshooting |
-
-### Connection route detection
-
-Inspect the selected ICE candidate pair at runtime:
-
-```typescript
-const route = await room.getConnectionRoute(peerId);
-// { kind: 'direct' | 'turn' | 'unknown', localCandidateType, remoteCandidateType, protocol }
-```
-
-Available callbacks: `onConnectionStateChange` and `onIceConnectionStateChange`.
+> **Note:** `IceMode` configuration is planned for a future release. For now, control ICE behavior via the `rtcConfig.iceTransportPolicy` option.
 
 ## Architecture
 
