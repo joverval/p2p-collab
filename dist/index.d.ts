@@ -21,8 +21,6 @@ export interface ConnectionRoute {
   relayProtocol?: string;
 }
 
-export type IceMode = 'stun-only' | 'all' | 'turn-only';
-
 export interface BroadcastResult {
   accepted: number;
   total: number;
