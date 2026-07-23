@@ -69,6 +69,8 @@ var DEFAULT_ICE_CONFIG = {
   iceCandidatePoolSize: 0,
   iceTransportPolicy: "all"
 };
+var DEFAULT_MAX_QUEUED_BYTES = 256 * 1024;
+var DEFAULT_MAX_PENDING_OFFERS = 50;
 function uuid() {
   return crypto.randomUUID();
 }
@@ -79,8 +81,11 @@ var P2PRoom = class {
   _offerTimers = /* @__PURE__ */ new Map();
   _peers = /* @__PURE__ */ new Map();
   _peerInfos = [];
+  _sendStates = /* @__PURE__ */ new Map();
+  _answeredOffers = /* @__PURE__ */ new Set();
   // Peer state
   _peer;
+  _hostSendState;
   // Handlers
   _onMessage;
   _onPeerJoin;
@@ -95,10 +100,13 @@ var P2PRoom = class {
   _baseUrl;
   _rtcConfig;
   _trickle;
+  _maxPendingOffers;
+  _maxQueuedBytes;
   constructor(isHost, baseUrl, opts = {}) {
     this.isHost = isHost;
     this._baseUrl = baseUrl;
-    this._rtcConfig = opts.rtcConfig || DEFAULT_ICE_CONFIG;
+    this._maxPendingOffers = opts.maxPendingOffers ?? DEFAULT_MAX_PENDING_OFFERS;
+    this._maxQueuedBytes = opts.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
     this._trickle = opts.trickle ?? false;
     this._onConnect = opts.onConnect;
     this._onPeerConnect = opts.onPeerConnect;
@@ -108,10 +116,45 @@ var P2PRoom = class {
     this._onConnectionStateChange = opts.onConnectionStateChange;
     this._onIceConnectionStateChange = opts.onIceConnectionStateChange;
     this._onSignal = opts.onSignal;
+    const iceMode = opts.iceMode ?? "all";
+    const userConfig = opts.rtcConfig;
+    switch (iceMode) {
+      case "stun-only": {
+        const servers = userConfig?.iceServers ?? DEFAULT_ICE_CONFIG.iceServers;
+        const stunServers = servers.filter((s) => {
+          if (!s) return false;
+          const urls = s.urls;
+          if (!urls) return true;
+          const list = Array.isArray(urls) ? urls : [urls];
+          return !list.some((u) => typeof u === "string" && u.startsWith("turn"));
+        });
+        this._rtcConfig = {
+          ...DEFAULT_ICE_CONFIG,
+          ...userConfig,
+          iceServers: stunServers,
+          iceTransportPolicy: "all"
+        };
+        break;
+      }
+      case "turn-only":
+        this._rtcConfig = {
+          ...DEFAULT_ICE_CONFIG,
+          ...userConfig,
+          iceTransportPolicy: "relay"
+        };
+        break;
+      case "all":
+      default:
+        this._rtcConfig = userConfig ?? DEFAULT_ICE_CONFIG;
+        break;
+    }
   }
   /** Generate an offer for a new peer. Host only. Returns { url, offerId }. */
   offerUrl() {
     if (!this.isHost) return Promise.reject(new Error("Only host can generate offers"));
+    if (this._pendingOffers.size >= this._maxPendingOffers) {
+      return Promise.reject(new Error(`Max pending offers (${this._maxPendingOffers}) reached`));
+    }
     return new Promise((resolve, reject) => {
       const offerId = uuid();
       const peer = new import_simple_peer.default({ initiator: true, trickle: this._trickle, config: this._rtcConfig });
@@ -153,6 +196,10 @@ var P2PRoom = class {
       this._onError?.(new Error("Only host can accept answers"));
       return;
     }
+    if (this._answeredOffers.has(offerId)) {
+      this._onError?.(new Error(`Offer ${offerId} already answered`));
+      return;
+    }
     const peer = this._pendingOffers.get(offerId);
     if (!peer) {
       this._onError?.(new Error(`No pending offer for ${offerId}`));
@@ -163,6 +210,7 @@ var P2PRoom = class {
       this._onError?.(new Error("Invalid answer URL"));
       return;
     }
+    this._answeredOffers.add(offerId);
     peer.signal(data);
   }
   /** Cancel a pending offer and destroy its peer. Host only. */
@@ -177,6 +225,38 @@ var P2PRoom = class {
     if (timer) {
       clearTimeout(timer);
       this._offerTimers.delete(offerId);
+    }
+    this._answeredOffers.delete(offerId);
+    const state = this._sendStates.get(offerId);
+    if (state) {
+      state.peer.removeAllListeners("drain");
+      this._sendStates.delete(offerId);
+    }
+  }
+  /** Feed a signal to a specific connection. Host uses offerId; peer uses 'host'. */
+  applySignal(connectionId, signal) {
+    if (this.isHost) {
+      const peer = this._peers.get(connectionId);
+      if (peer) {
+        peer.signal(signal);
+        return;
+      }
+      const pending = this._pendingOffers.get(connectionId);
+      if (pending) {
+        pending.signal(signal);
+        return;
+      }
+      this._onError?.(new Error(`No connection found for ${connectionId}`));
+    } else {
+      if (connectionId !== "host") {
+        this._onError?.(new Error('Peer mode: connectionId must be "host"'));
+        return;
+      }
+      if (this._peer) {
+        this._peer.signal(signal);
+      } else {
+        this._onError?.(new Error("Not connected to host"));
+      }
     }
   }
   /** Connect to host using offer URL. Peer only. Returns answer URL promise. */
@@ -198,6 +278,16 @@ var P2PRoom = class {
         }
       });
       peer.on("connect", () => {
+        this._hostSendState = {
+          peer,
+          peerId: "host",
+          queue: [],
+          queuedBytes: 0,
+          draining: false,
+          connected: true
+        };
+        this._attachDrainHandler(this._hostSendState);
+        this._flushQueue(this._hostSendState);
         peer.on("data", (data) => {
           this._onMessage?.(data, "host");
         });
@@ -207,7 +297,15 @@ var P2PRoom = class {
         this._onError?.(err);
         reject(err);
       });
-      peer.on("close", () => this._onClose?.());
+      peer.on("close", () => {
+        if (this._hostSendState) {
+          this._hostSendState.peer.removeAllListeners("drain");
+          this._hostSendState.queue = [];
+          this._hostSendState.queuedBytes = 0;
+          this._hostSendState = void 0;
+        }
+        this._onClose?.();
+      });
       this._peer = peer;
       peer.signal(signalData);
     });
@@ -218,43 +316,43 @@ var P2PRoom = class {
   }
   send(data) {
     if (this.isHost) {
-      let accepted = false;
-      for (const peer of this._peers.values()) {
-        if (peer.connected) {
-          peer.send(data);
-          accepted = true;
-        }
+      let anyAccepted = false;
+      let anyQueued = false;
+      for (const state of this._sendStates.values()) {
+        const r = this._sendToState(state, data);
+        if (r.status === "accepted") anyAccepted = true;
+        if (r.status === "queued") anyQueued = true;
       }
-      return accepted;
-    } else if (this._peer && this._peer.connected) {
-      this._peer.send(data);
-      return true;
+      if (anyAccepted) return { status: "accepted" };
+      if (anyQueued) return { status: "queued" };
+      return { status: "rejected", reason: "no peers connected" };
+    } else if (this._hostSendState) {
+      return this._sendToState(this._hostSendState, data);
     }
-    return false;
+    return { status: "rejected", reason: "not connected" };
   }
   sendToPeer(peerId, data) {
-    if (!this.isHost) return false;
-    const peer = this._peers.get(peerId);
-    if (peer && peer.connected) {
-      peer.send(data);
-      return true;
-    }
-    return false;
+    if (!this.isHost) return { status: "rejected", reason: "only host can send to specific peers" };
+    const state = this._sendStates.get(peerId);
+    if (!state) return { status: "rejected", reason: `unknown peer: ${peerId}` };
+    return this._sendToState(state, data);
   }
   broadcastExcept(data, excludedPeerId) {
-    if (!this.isHost) return { accepted: 0, total: 0 };
+    if (!this.isHost) return { accepted: 0, queued: 0, rejected: 0, total: 0 };
     let accepted = 0;
+    let queued = 0;
+    let rejected = 0;
     let total = 0;
-    for (const [id, peer] of this._peers) {
+    for (const [id, state] of this._sendStates) {
       if (id !== excludedPeerId) {
         total++;
-        if (peer.connected) {
-          peer.send(data);
-          accepted++;
-        }
+        const r = this._sendToState(state, data);
+        if (r.status === "accepted") accepted++;
+        else if (r.status === "queued") queued++;
+        else rejected++;
       }
     }
-    return { accepted, total };
+    return { accepted, queued, rejected, total };
   }
   onMessage(handler) {
     this._onMessage = handler;
@@ -263,6 +361,16 @@ var P2PRoom = class {
     this._onPeerJoin = handler;
   }
   close() {
+    for (const state of this._sendStates.values()) {
+      state.peer.removeAllListeners("drain");
+      state.queue = [];
+    }
+    this._sendStates.clear();
+    if (this._hostSendState) {
+      this._hostSendState.peer.removeAllListeners("drain");
+      this._hostSendState.queue = [];
+      this._hostSendState = void 0;
+    }
     for (const t of this._offerTimers.values()) clearTimeout(t);
     this._offerTimers.clear();
     for (const p of this._pendingOffers.values()) p.destroy();
@@ -271,6 +379,7 @@ var P2PRoom = class {
     this._pendingOffers.clear();
     this._peers.clear();
     this._peerInfos = [];
+    this._answeredOffers.clear();
     this._onClose?.();
   }
   // ── Diagnostics ──
@@ -350,6 +459,63 @@ var P2PRoom = class {
       };
     }
   }
+  _attachDrainHandler(state) {
+    state.peer.on("drain", () => {
+      state.draining = false;
+      state.queuedBytes = state.peer.bufferSize ?? 0;
+      this._flushQueue(state);
+    });
+  }
+  _sendToState(state, data) {
+    const byteLength = typeof data === "string" ? new TextEncoder().encode(data).length : data.length;
+    if (state.connected && state.queue.length === 0) {
+      const wrote = state.peer.write?.(data);
+      if (wrote === false) {
+        state.draining = true;
+        return this._enqueue(state, data, byteLength);
+      }
+      if (wrote === void 0) {
+        state.peer.send?.(data);
+      }
+      const buf = state.peer._channel?.bufferedAmount ?? state.peer.bufferSize ?? 0;
+      return { status: "accepted", bufferedAmount: buf };
+    }
+    return this._enqueue(state, data, byteLength);
+  }
+  _enqueue(state, data, byteLength) {
+    if (state.queuedBytes + byteLength > this._maxQueuedBytes) {
+      return {
+        status: "rejected",
+        reason: `queue full: ${state.queuedBytes}/${this._maxQueuedBytes} bytes buffered`,
+        bufferedAmount: state.queuedBytes
+      };
+    }
+    state.queuedBytes += byteLength;
+    if (state.connected) {
+      const wrote = state.peer.write?.(data);
+      if (wrote === false) {
+        state.draining = true;
+        state.queue.push({ data, byteLength });
+        return { status: "queued", bufferedAmount: state.queuedBytes };
+      }
+      return { status: "queued", bufferedAmount: state.queuedBytes };
+    }
+    state.queue.push({ data, byteLength });
+    return { status: "queued", bufferedAmount: state.queuedBytes };
+  }
+  _flushQueue(state) {
+    while (state.queue.length > 0 && !state.draining) {
+      const msg = state.queue.shift();
+      state.queuedBytes -= msg.byteLength;
+      const wrote = state.peer.write?.(msg.data);
+      if (wrote === false) {
+        state.draining = true;
+        state.queue.unshift(msg);
+        state.queuedBytes += msg.byteLength;
+        break;
+      }
+    }
+  }
   _onPeerConnected(offerId, peer) {
     const peerId = uuid();
     this._attachStateCallbacks(peer, peerId);
@@ -358,6 +524,7 @@ var P2PRoom = class {
       id: peerId,
       send: (d) => peer.send(d)
     });
+    this._answeredOffers.delete(offerId);
     this._pendingOffers.delete(offerId);
     const timer = this._offerTimers.get(offerId);
     if (timer) {
@@ -366,10 +533,27 @@ var P2PRoom = class {
     }
     this._onPeerJoin?.(peerId);
     this._onPeerConnect?.(peerId);
+    const sendState = {
+      peer,
+      peerId,
+      queue: [],
+      queuedBytes: 0,
+      draining: false,
+      connected: true
+    };
+    this._sendStates.set(peerId, sendState);
+    this._attachDrainHandler(sendState);
+    this._flushQueue(sendState);
     peer.on("data", (data) => {
       this._onMessage?.(data, peerId);
     });
     peer.on("close", () => {
+      const st = this._sendStates.get(peerId);
+      if (st) {
+        st.peer.removeAllListeners("drain");
+        st.queue = [];
+        this._sendStates.delete(peerId);
+      }
       this._peers.delete(peerId);
       this._peerInfos = this._peerInfos.filter((p) => p.id !== peerId);
       this._onPeerLeave?.(peerId);
@@ -380,8 +564,8 @@ var P2PRoom = class {
 // src/index.ts
 async function createRoom(baseUrl = "", opts) {
   const room = new P2PRoom(true, baseUrl, opts);
-  const url = await room.offerUrl();
-  return { url, room };
+  const result = await room.offerUrl();
+  return { url: result.url, room };
 }
 async function joinRoom(offerUrl, baseUrl = "", opts) {
   const room = new P2PRoom(false, baseUrl, opts);

@@ -1,7 +1,7 @@
 // src/index.ts
 export { encodeSignal, decodeSignal } from './signal';
 export { P2PRoom } from './room';
-export type { Room, RoomOptions, PeerInfo, CreateRoomResult, SignalData, ConnectionRoute, BroadcastResult } from './types';
+export type { Room, RoomOptions, PeerInfo, CreateRoomResult, SignalData, ConnectionRoute, BroadcastResult, SendResult, IceMode } from './types';
 
 import { P2PRoom } from './room';
 import type { Room, RoomOptions, CreateRoomResult } from './types';
@@ -18,8 +18,8 @@ export async function createRoom(
   opts?: RoomOptions
 ): Promise<CreateRoomResult> {
   const room = new P2PRoom(true, baseUrl, opts);
-  const url = await room.offerUrl();
-  return { url, room };
+  const result = await room.offerUrl();
+  return { url: result.url, room };
 }
 
 /**
