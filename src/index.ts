@@ -1,7 +1,7 @@
 // src/index.ts
 export { encodeSignal, decodeSignal } from './signal';
 export { P2PRoom } from './room';
-export type { Room, RoomOptions, PeerInfo, CreateRoomResult, SignalData, ConnectionRoute, IceMode, BroadcastResult } from './types';
+export type { Room, RoomOptions, PeerInfo, CreateRoomResult, SignalData, ConnectionRoute, BroadcastResult } from './types';
 
 import { P2PRoom } from './room';
 import type { Room, RoomOptions, CreateRoomResult } from './types';
