@@ -554,11 +554,9 @@ export class P2PRoom implements Room {
     this._pendingOffers.delete(offerId);
     const timer = this._offerTimers.get(offerId);
     if (timer) { clearTimeout(timer); this._offerTimers.delete(offerId); }
-    // Await onPeerJoin so the handler can create next offer before we mark this peer as fully connected
-    await this._onPeerJoin?.(peerId);
-    this._onPeerConnect?.(peerId);
 
-    // Initialize send state for this peer
+    // Initialize send state and register close/data handlers BEFORE awaiting
+    // onPeerJoin so cleanup works even if close fires during the join callback.
     const sendState: PeerSendState = {
       peer,
       peerId,
@@ -569,21 +567,15 @@ export class P2PRoom implements Room {
     };
     this._sendStates.set(peerId, sendState);
     this._attachDrainHandler(sendState);
-    this._flushQueue(sendState);
 
     peer.on('data', (data: Uint8Array) => {
       this._onMessage?.(data, peerId);
     });
 
     peer.on('close', () => {
-      // Guard against duplicate close events
       if (!this._peers.has(peerId)) return;
-
-      // Detach listeners to prevent stale callbacks after close
       (peer as any).removeAllListeners('data');
       (peer as any).removeAllListeners('close');
-
-      // Clean up send state
       const st = this._sendStates.get(peerId);
       if (st) {
         (st.peer as any).removeAllListeners('drain');
@@ -594,5 +586,10 @@ export class P2PRoom implements Room {
       this._peerInfos = this._peerInfos.filter(p => p.id !== peerId);
       this._onPeerLeave?.(peerId);
     });
+
+    // Await onPeerJoin so the handler can create next offer before we mark this peer as fully connected
+    await this._onPeerJoin?.(peerId);
+    this._onPeerConnect?.(peerId);
+    this._flushQueue(sendState);
   }
 }

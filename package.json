@@ -1,6 +1,6 @@
 {
   "name": "@joverval/p2p-collab",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser-to-browser P2P collaboration library using WebRTC data channels and URL-encoded SDP signaling. No servers required.",
   "type": "module",
   "main": "./dist/index.cjs",
