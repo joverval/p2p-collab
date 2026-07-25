@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>p2p-collab smoke</title></head><body>
+<h1>p2p-collab smoke test</h1>
+<div id="results"></div>
+<script type="module">
+import { P2PRoom, encodeSignal, decodeSignal } from './dist/index.js';
+const el = document.getElementById('results');
+el.innerHTML = 'P2PRoom: ' + typeof P2PRoom + '<br>encodeSignal: ' + typeof encodeSignal + '<br>decodeSignal: ' + typeof decodeSignal;
+console.log('SMOKE PASS: all exports loaded');
+</script>
+</body></html>
