@@ -38,6 +38,26 @@ export interface BroadcastResult {
   total: number;
 }
 
+export interface CancelOfferResult {
+  cancelled: boolean;
+}
+
+export interface IceConfigurationSummary {
+  mode: IceMode;
+  transportPolicy: RTCIceTransportPolicy;
+  stunCount: number;
+  turnCount: number;
+  hasTurnCredentials: boolean;
+}
+
+export interface CandidateSummary {
+  host: number;
+  srflx: number;
+  relay: number;
+  udp: number;
+  tcp: number;
+}
+
 // ---- Public API ----
 export interface RoomOptions {
   rtcConfig?: RTCConfiguration;
@@ -45,9 +65,11 @@ export interface RoomOptions {
   iceMode?: IceMode;
   maxPendingOffers?: number;
   maxQueuedBytes?: number;
+  offerTimeoutMs?: number;
   onConnect?: () => void;
   onPeerConnect?: (peerId: string) => void;
   onPeerLeave?: (peerId: string) => void;
+  onOfferAnswered?: (offerId: string) => void;
   onError?: (err: Error) => void;
   onClose?: () => void;
   onConnectionStateChange?: (state: RTCPeerConnectionState, peerId?: string) => void;
@@ -64,11 +86,14 @@ export interface Room {
   connectToHost(offerUrl: string): Promise<string>;
   onMessage(handler: (data: string | Uint8Array, peerId: string) => void): void;
   onPeerJoin(handler: (peerId: string) => void): void;
+  onOfferAnswered(handler: (offerId: string) => void): void;
   getConnectionRoute(peerId?: string): Promise<ConnectionRoute>;
   getConnectionState(peerId?: string): RTCPeerConnectionState | 'unknown';
   getIceConnectionState(peerId?: string): RTCIceConnectionState | 'unknown';
-  cancelOffer(offerId: string): void;
+  cancelOffer(offerId: string): CancelOfferResult;
   applySignal(connectionId: string, signal: SignalData): void;
+  getIceConfigurationSummary(): IceConfigurationSummary;
+  getCandidateSummary(peerId?: string): Promise<CandidateSummary>;
   readonly peers: PeerInfo[];
   close(): void;
   readonly isHost: boolean;

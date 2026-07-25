@@ -121,8 +121,9 @@ describe('P2PRoom', () => {
       const { offerId } = await room.offerUrl();
 
       room.acceptAnswer(offerId, '#sdp=' + btoa(JSON.stringify({ type: 'answer', sdp: 'peer-sdp' })));
-      const pending = (room as any)._pendingOffers.get(offerId);
-      expect(pending).toBeTruthy();
+      const record = (room as any)._offers.get(offerId);
+      expect(record).toBeTruthy();
+      expect(record.state).toBe('answered');
     });
 
     it('broadcasts send() to all connected peers', () => {
@@ -410,7 +411,14 @@ describe('P2PRoom', () => {
     });
 
     it('turn-only sets iceTransportPolicy to relay', () => {
-      const room = new P2PRoom(true, '', { iceMode: 'turn-only' });
+      const room = new P2PRoom(true, '', {
+        iceMode: 'turn-only',
+        rtcConfig: {
+          iceServers: [
+            { urls: 'turn:custom-turn:3478', username: 'u', credential: 'p' },
+          ],
+        },
+      });
       const cfg = (room as any)._rtcConfig as RTCConfiguration;
       expect(cfg.iceTransportPolicy).toBe('relay');
     });
@@ -426,6 +434,55 @@ describe('P2PRoom', () => {
       const room = new P2PRoom(true, '');
       const cfg = (room as any)._rtcConfig as RTCConfiguration;
       expect(cfg.iceTransportPolicy).toBe('all');
+    });
+
+    it('turn-only without TURN throws TURN_REQUIRED', () => {
+      expect(() => new P2PRoom(true, '', { iceMode: 'turn-only' })).toThrow('TURN_REQUIRED');
+    });
+
+    it('turn-only without TURN with only STUN servers throws', () => {
+      expect(() => new P2PRoom(true, '', {
+        iceMode: 'turn-only',
+        rtcConfig: {
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        },
+      })).toThrow('TURN_REQUIRED');
+    });
+
+    it('stun-only strips turns: URLs', () => {
+      const room = new P2PRoom(true, '', {
+        iceMode: 'stun-only',
+        rtcConfig: {
+          iceServers: [
+            { urls: 'stun:stun.example.com:3478' },
+            { urls: 'turns:secure-turn:5349' },
+          ],
+        },
+      });
+      const cfg = (room as any)._rtcConfig as RTCConfiguration;
+      expect(cfg.iceServers!.length).toBe(1);
+      expect(cfg.iceServers![0].urls).toBe('stun:stun.example.com:3478');
+    });
+
+    it('stun-only strips TURN credentials from kept servers', () => {
+      const room = new P2PRoom(true, '', {
+        iceMode: 'stun-only',
+        rtcConfig: {
+          iceServers: [
+            {
+              urls: 'stun:stun.example.com:3478',
+              username: 'should-be-stripped',
+              credential: 'should-be-stripped-too',
+            },
+          ],
+        },
+      });
+      const cfg = (room as any)._rtcConfig as RTCConfiguration;
+      expect(cfg.iceServers!.length).toBe(1);
+      const server = cfg.iceServers![0] as any;
+      expect(server.urls).toBe('stun:stun.example.com:3478');
+      expect(server.username).toBeUndefined();
+      expect(server.credential).toBeUndefined();
     });
   });
 
@@ -547,10 +604,9 @@ describe('P2PRoom', () => {
       })();
       const { offerId } = await promise;
 
-      expect((room as any)._pendingOffers.has(offerId)).toBe(true);
+      expect((room as any)._offers.has(offerId)).toBe(true);
       room.cancelOffer(offerId);
-      expect((room as any)._pendingOffers.has(offerId)).toBe(false);
-      expect((room as any)._offerTimers.has(offerId)).toBe(false);
+      expect((room as any)._offers.has(offerId)).toBe(false);
     });
 
     it('close cancels all pending offer timers', async () => {
@@ -563,10 +619,9 @@ describe('P2PRoom', () => {
       })();
       await promise;
 
-      expect((room as any)._offerTimers.size).toBeGreaterThanOrEqual(1);
+      expect((room as any)._offers.size).toBeGreaterThanOrEqual(1);
       room.close();
-      expect((room as any)._pendingOffers.size).toBe(0);
-      expect((room as any)._offerTimers.size).toBe(0);
+      expect((room as any)._offers.size).toBe(0);
     });
 
     it('cancelOffer is no-op for non-host', () => {
@@ -574,21 +629,17 @@ describe('P2PRoom', () => {
       room.cancelOffer('any-id');
     });
 
-    it('duplicate acceptAnswer emits error', async () => {
-      const errors: Error[] = [];
-      const room = new P2PRoom(true, 'http://localhost', { onError: (e) => errors.push(e) });
+    it('duplicate acceptAnswer throws OFFER_ALREADY_ANSWERED', async () => {
+      const room = new P2PRoom(true, 'http://localhost');
       setTimeout(() => {
         mockPeerEvents[0]?.get('signal')?.({ type: 'offer', sdp: 'x' });
       }, 5);
       const { offerId } = await room.offerUrl();
       const url = '#sdp=' + btoa(JSON.stringify({ type: 'answer', sdp: 'a' }));
 
-      room.acceptAnswer(offerId, url);
-      expect(errors.length).toBe(0); // first accept OK
+      room.acceptAnswer(offerId, url); // first accept OK
 
-      room.acceptAnswer(offerId, url);
-      expect(errors.length).toBe(1);
-      expect(errors[0].message).toContain('already answered');
+      expect(() => room.acceptAnswer(offerId, url)).toThrow('OFFER_ALREADY_ANSWERED');
     });
 
     it('offerUrl rejects when maxPendingOffers reached', async () => {
@@ -642,13 +693,12 @@ describe('P2PRoom', () => {
       vi.advanceTimersByTime(10);
       const { offerId } = await offerPromise;
 
-      expect((room as any)._pendingOffers.has(offerId)).toBe(true);
+      expect((room as any)._offers.has(offerId)).toBe(true);
 
       // Advance past the 5-minute expiry
       vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 
-      expect((room as any)._pendingOffers.has(offerId)).toBe(false);
-      expect((room as any)._offerTimers.has(offerId)).toBe(false);
+      expect((room as any)._offers.has(offerId)).toBe(false);
 
       vi.useRealTimers();
     });
@@ -973,6 +1023,159 @@ describe('P2PRoom', () => {
 
       expect(connStates.length).toBe(1);
       expect(iceStates.length).toBe(1);
+    });
+  });
+
+  // ── Structured Signaling ──
+
+  describe('structured signaling', () => {
+    it('createOffer returns {offerId, signal} without URL encoding', async () => {
+      const room = new P2PRoom(true, 'http://localhost');
+      setTimeout(() => {
+        mockPeerEvents[0]?.get('signal')?.({ type: 'offer', sdp: 'test-sdp' });
+      }, 5);
+      const { offerId, signal } = await room.createOffer();
+      expect(offerId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(signal).toEqual({ type: 'offer', sdp: 'test-sdp' });
+      expect((room as any)._offers.has(offerId)).toBe(true);
+      expect((room as any)._offers.get(offerId).state).toBe('pending');
+    });
+
+    it('createOffer rejects for non-host', async () => {
+      const room = new P2PRoom(false, '');
+      await expect(room.createOffer()).rejects.toThrow('Only host');
+    });
+
+    it('offerUrl is a URL wrapper over createOffer', async () => {
+      const room = new P2PRoom(true, 'http://localhost');
+      setTimeout(() => {
+        mockPeerEvents[0]?.get('signal')?.({ type: 'offer', sdp: 'sdp' });
+      }, 5);
+      const { url, offerId } = await room.offerUrl();
+      expect(url).toContain('#sdp=');
+      expect(offerId).toMatch(/^[0-9a-f-]{36}$/);
+      // Verify the offer is tracked in _offers
+      expect((room as any)._offers.has(offerId)).toBe(true);
+    });
+
+    it('acceptAnswerSignal accepts raw SignalData', async () => {
+      const room = new P2PRoom(true, 'http://localhost');
+      setTimeout(() => {
+        mockPeerEvents[0]?.get('signal')?.({ type: 'offer', sdp: 'x' });
+      }, 5);
+      const { offerId } = await room.createOffer();
+
+      room.acceptAnswerSignal(offerId, { type: 'answer', sdp: 'peer-sdp' });
+      const record = (room as any)._offers.get(offerId);
+      expect(record.state).toBe('answered');
+    });
+
+    it('acceptAnswerSignal validates signal', () => {
+      const errors: Error[] = [];
+      const room = new P2PRoom(true, 'http://localhost', { onError: (e) => errors.push(e) });
+      // Set up an offer
+      (room as any)._offers.set('test-id', {
+        offerId: 'test-id',
+        peer: { signal: vi.fn() },
+        state: 'pending',
+        createdAt: Date.now(),
+      });
+
+      room.acceptAnswerSignal('test-id', { type: 'answer', sdp: 'x', bogus: 1 });
+      expect(errors.length).toBe(1);
+      expect(errors[0].message).toContain('Unknown signal field');
+    });
+
+    it('acceptAnswerSignal rejects oversized signal', () => {
+      const errors: Error[] = [];
+      const room = new P2PRoom(true, 'http://localhost', { onError: (e) => errors.push(e) });
+      (room as any)._offers.set('test-id', {
+        offerId: 'test-id',
+        peer: { signal: vi.fn() },
+        state: 'pending',
+        createdAt: Date.now(),
+      });
+
+      // Create a signal with a very large sdp
+      const bigSignal = { type: 'answer' as const, sdp: 'x'.repeat(300 * 1024) };
+      room.acceptAnswerSignal('test-id', bigSignal);
+      expect(errors.length).toBe(1);
+      expect(errors[0].message).toContain('too large');
+    });
+
+    it('acceptAnswer wraps acceptAnswerSignal with URL decoding', async () => {
+      const room = new P2PRoom(true, 'http://localhost');
+      setTimeout(() => {
+        mockPeerEvents[0]?.get('signal')?.({ type: 'offer', sdp: 'x' });
+      }, 5);
+      const { offerId } = await room.offerUrl();
+
+      const b64 = btoa(JSON.stringify({ type: 'answer', sdp: 'a' }));
+      room.acceptAnswer(offerId, `#sdp=${b64}`);
+      expect((room as any)._offers.get(offerId).state).toBe('answered');
+    });
+
+    it('createAnswer returns {connectionId, signal}', async () => {
+      const room = new P2PRoom(false, 'http://localhost');
+      const offer = { type: 'offer' as const, sdp: 'offer-sdp' };
+
+      const promise = room.createAnswer(offer);
+      setTimeout(() => {
+        mockPeerEvents[0]?.get('signal')?.({ type: 'answer', sdp: 'answer-sdp' });
+      }, 5);
+
+      const { connectionId, signal } = await promise;
+      expect(connectionId).toBe('host');
+      expect(signal).toEqual({ type: 'answer', sdp: 'answer-sdp' });
+    });
+
+    it('createAnswer rejects for host', async () => {
+      const room = new P2PRoom(true, '');
+      await expect(room.createAnswer({ sdp: 'x' })).rejects.toThrow('Host cannot');
+    });
+
+    it('createAnswer validates incoming signal', async () => {
+      const room = new P2PRoom(false, '');
+      // Unknown field
+      await expect(room.createAnswer({ bogus: true } as any)).rejects.toThrow('Unknown signal field');
+      // Not an object
+      await expect(room.createAnswer(42 as any)).rejects.toThrow('non-null object');
+    });
+
+    it('connectToHost wraps createAnswer', async () => {
+      const room = new P2PRoom(false, 'http://localhost');
+      const offerB64 = btoa(JSON.stringify({ type: 'offer', sdp: 'offer-sdp' }));
+
+      const promise = room.connectToHost(`#sdp=${offerB64}`);
+      setTimeout(() => {
+        mockPeerEvents[0]?.get('signal')?.({ type: 'answer', sdp: 'answer-sdp' });
+      }, 5);
+
+      const url = await promise;
+      expect(url).toContain('#sdp=');
+      expect((room as any)._peer).toBeDefined();
+    });
+
+    it('connectToHost rejects invalid signals', async () => {
+      const room = new P2PRoom(false, '');
+      await expect(room.connectToHost('')).rejects.toThrow();
+      await expect(room.connectToHost('not-base64')).rejects.toThrow();
+    });
+
+    it('applySignal validates signal', () => {
+      const errors: Error[] = [];
+      const room = new P2PRoom(true, '', { onError: (e) => errors.push(e) });
+      room.applySignal('any', { unknownField: true } as any);
+      expect(errors.length).toBe(1);
+      expect(errors[0].message).toContain('Unknown signal field');
+    });
+
+    it('applySignal rejects oversized signal', () => {
+      const errors: Error[] = [];
+      const room = new P2PRoom(true, '', { onError: (e) => errors.push(e) });
+      room.applySignal('any', { sdp: 'x'.repeat(300 * 1024) } as any);
+      expect(errors.length).toBe(1);
+      expect(errors[0].message).toContain('too large');
     });
   });
 });

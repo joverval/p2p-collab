@@ -1,6 +1,6 @@
 import SimplePeer from 'simple-peer';
 import { encodeSignal, decodeSignal } from './signal';
-import type { Room, RoomOptions, PeerInfo, SignalData, ConnectionRoute, BroadcastResult, SendResult, IceMode } from './types';
+import type { Room, RoomOptions, PeerInfo, SignalData, ConnectionRoute, BroadcastResult, SendResult, IceMode, CancelOfferResult, IceConfigurationSummary, CandidateSummary } from './types';
 
 const DEFAULT_ICE_CONFIG: RTCConfiguration = {
   iceServers: [
@@ -16,6 +16,16 @@ const DEFAULT_MAX_PENDING_OFFERS = 50;
 
 function uuid(): string {
   return crypto.randomUUID();
+}
+
+type OfferState = 'pending' | 'answered' | 'connected' | 'failed' | 'cancelled';
+
+interface OfferRecord {
+  peer: InstanceType<typeof SimplePeer>;
+  state: OfferState;
+  createdAt: number;
+  answeredAt?: number;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 interface QueuedMessage {
@@ -36,12 +46,10 @@ export class P2PRoom implements Room {
   public readonly isHost: boolean;
 
   // Host state
-  private _pendingOffers: Map<string, InstanceType<typeof SimplePeer>> = new Map();
-  private _offerTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private _offers: Map<string, OfferRecord> = new Map();
   private _peers: Map<string, InstanceType<typeof SimplePeer>> = new Map();
   private _peerInfos: PeerInfo[] = [];
   private _sendStates: Map<string, PeerSendState> = new Map();
-  private _answeredOffers: Set<string> = new Set();
 
   // Peer state
   private _peer?: InstanceType<typeof SimplePeer>;
@@ -50,6 +58,7 @@ export class P2PRoom implements Room {
   // Handlers
   private _onMessage?: (data: string | Uint8Array, peerId: string) => void;
   private _onPeerJoin?: (peerId: string) => void;
+  private _onOfferAnswered?: (offerId: string) => void;
   private readonly _onPeerConnect?: (peerId: string) => void;
   private readonly _onPeerLeave?: (peerId: string) => void;
   private readonly _onConnect?: () => void;
@@ -64,16 +73,20 @@ export class P2PRoom implements Room {
   private readonly _trickle: boolean;
   private readonly _maxPendingOffers: number;
   private readonly _maxQueuedBytes: number;
+  private readonly _offerTimeoutMs: number;
+  private readonly _iceMode: IceMode;
 
   constructor(isHost: boolean, baseUrl: string, opts: RoomOptions = {}) {
     this.isHost = isHost;
     this._baseUrl = baseUrl;
     this._maxPendingOffers = opts.maxPendingOffers ?? DEFAULT_MAX_PENDING_OFFERS;
     this._maxQueuedBytes = opts.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
+    this._offerTimeoutMs = opts.offerTimeoutMs ?? 5 * 60 * 1000;
     this._trickle = opts.trickle ?? false;
     this._onConnect = opts.onConnect;
     this._onPeerConnect = opts.onPeerConnect;
     this._onPeerLeave = opts.onPeerLeave;
+    this._onOfferAnswered = opts.onOfferAnswered;
     this._onError = opts.onError;
     this._onClose = opts.onClose;
     this._onConnectionStateChange = opts.onConnectionStateChange;
@@ -81,19 +94,28 @@ export class P2PRoom implements Room {
     this._onSignal = opts.onSignal;
 
     // Wire IceMode
-    const iceMode: IceMode = opts.iceMode ?? 'all';
+    this._iceMode = opts.iceMode ?? 'all';
     const userConfig = opts.rtcConfig;
 
-    switch (iceMode) {
+    switch (this._iceMode) {
       case 'stun-only': {
         const servers = (userConfig?.iceServers ?? DEFAULT_ICE_CONFIG.iceServers) as RTCIceServer[];
         const stunServers = servers
           .filter(s => {
             if (!s) return false;
             const urls = s.urls;
-            if (!urls) return true;
+            // ponytail: servers without urls (credential-only TURN) are useless as STUN — strip
+            if (!urls) return false;
             const list = Array.isArray(urls) ? urls : [urls];
-            return !list.some(u => typeof u === 'string' && u.startsWith('turn'));
+            return !list.some(u => typeof u === 'string' && (u.startsWith('turn:') || u.startsWith('turns:')));
+          })
+          // ponytail: strip credentials — never retain TURN credentials after filtering
+          .map(s => {
+            if ((s as any).username || (s as any).credential || (s as any).credentialType) {
+              const { username, credential, credentialType, ...clean } = s as any;
+              return clean as RTCIceServer;
+            }
+            return s;
           });
         this._rtcConfig = {
           ...DEFAULT_ICE_CONFIG,
@@ -103,16 +125,33 @@ export class P2PRoom implements Room {
         };
         break;
       }
-      case 'turn-only':
+      case 'turn-only': {
+        const merged = {
+          ...DEFAULT_ICE_CONFIG,
+          ...userConfig,
+          iceTransportPolicy: 'relay' as RTCIceTransportPolicy,
+        };
+        // ponytail: inline TURN check — no helper, just one loop
+        let hasTurn = false;
+        for (const s of (merged.iceServers ?? []) as RTCIceServer[]) {
+          if (!s?.urls) continue;
+          const list = Array.isArray(s.urls) ? s.urls : [s.urls];
+          if (list.some(u => typeof u === 'string' && (u.startsWith('turn:') || u.startsWith('turns:')))) {
+            hasTurn = true;
+            break;
+          }
+        }
+        if (!hasTurn) throw new Error('TURN_REQUIRED');
+        this._rtcConfig = merged;
+        break;
+      }
+      case 'all':
+      default:
         this._rtcConfig = {
           ...DEFAULT_ICE_CONFIG,
           ...userConfig,
-          iceTransportPolicy: 'relay',
+          iceTransportPolicy: 'all',
         };
-        break;
-      case 'all':
-      default:
-        this._rtcConfig = userConfig ?? DEFAULT_ICE_CONFIG;
         break;
     }
   }
@@ -120,23 +159,27 @@ export class P2PRoom implements Room {
   /** Generate an offer for a new peer. Host only. Returns { url, offerId }. */
   offerUrl(): Promise<{ url: string; offerId: string }> {
     if (!this.isHost) return Promise.reject(new Error('Only host can generate offers'));
-    if (this._pendingOffers.size >= this._maxPendingOffers) {
-      return Promise.reject(new Error(`Max pending offers (${this._maxPendingOffers}) reached`));
+    if (this._offers.size >= this._maxPendingOffers) {
+      const err = new Error(`Max pending offers (${this._maxPendingOffers}) reached`);
+      (err as any).code = 'MAX_PENDING_OFFERS';
+      return Promise.reject(err);
     }
     return new Promise((resolve, reject) => {
       const offerId = uuid();
       const peer = new SimplePeer({ initiator: true, trickle: this._trickle, config: this._rtcConfig });
-      this._pendingOffers.set(offerId, peer);
+      const record: OfferRecord = { peer, state: 'pending', createdAt: Date.now() };
+      this._offers.set(offerId, record);
 
-      // Auto-expire pending offers after 5 minutes
-      const timer = setTimeout(() => {
-        if (this._pendingOffers.has(offerId)) {
-          peer.destroy();
-          this._pendingOffers.delete(offerId);
-          this._offerTimers.delete(offerId);
+      // Auto-expire pending offers
+      record.timer = setTimeout(() => {
+        const offer = this._offers.get(offerId);
+        if (offer && offer.state === 'pending') {
+          if (offer.timer) { clearTimeout(offer.timer); offer.timer = undefined; }
+          offer.peer.destroy();
+          offer.state = 'cancelled';
+          this._offers.delete(offerId);
         }
-      }, 5 * 60 * 1000);
-      this._offerTimers.set(offerId, timer);
+      }, this._offerTimeoutMs);
 
       let resolved = false;
       peer.on('signal', (data: SignalData) => {
@@ -151,59 +194,64 @@ export class P2PRoom implements Room {
 
       peer.on('connect', () => this._onPeerConnected(offerId, peer));
       peer.on('error', (err: Error) => {
-        this._pendingOffers.delete(offerId);
-        const t = this._offerTimers.get(offerId);
-        if (t) { clearTimeout(t); this._offerTimers.delete(offerId); }
+        const offer = this._offers.get(offerId);
+        if (offer) {
+          offer.state = 'failed';
+          if (offer.timer) { clearTimeout(offer.timer); offer.timer = undefined; }
+        }
         this._onError?.(err);
         reject(err);
       });
     });
   }
 
-  /** Accept a peer's answer for a specific offer. Host only. */
+  /** Accept a peer's answer for a specific offer. Host only. Throws if already answered. */
   acceptAnswer(offerId: string, signalUrl: string): void {
     if (!this.isHost) {
       this._onError?.(new Error('Only host can accept answers'));
       return;
     }
-    if (this._answeredOffers.has(offerId)) {
-      this._onError?.(new Error(`Offer ${offerId} already answered`));
-      return;
-    }
-    const peer = this._pendingOffers.get(offerId);
-    if (!peer) {
+    const offer = this._offers.get(offerId);
+    if (!offer) {
       this._onError?.(new Error(`No pending offer for ${offerId}`));
       return;
+    }
+    if (offer.state !== 'pending') {
+      throw new Error('OFFER_ALREADY_ANSWERED');
     }
     const data = decodeSignal(signalUrl);
     if (!data) {
       this._onError?.(new Error('Invalid answer URL'));
       return;
     }
-    this._answeredOffers.add(offerId);
-    peer.signal(data);
+    offer.state = 'answered';
+    offer.answeredAt = Date.now();
+    if (offer.timer) { clearTimeout(offer.timer); offer.timer = undefined; }
+    offer.peer.signal(data);
+    this._onOfferAnswered?.(offerId);
   }
 
-  /** Cancel a pending offer and destroy its peer. Host only. */
-  cancelOffer(offerId: string): void {
-    if (!this.isHost) return;
-    const peer = this._pendingOffers.get(offerId);
-    if (peer) {
-      peer.destroy();
-      this._pendingOffers.delete(offerId);
+  /** Cancel a pending offer and destroy its peer. Host only. Idempotent. */
+  cancelOffer(offerId: string): CancelOfferResult {
+    if (!this.isHost) return { cancelled: false };
+    const offer = this._offers.get(offerId);
+    let cancelled = false;
+    if (offer) {
+      if (offer.timer) { clearTimeout(offer.timer); offer.timer = undefined; }
+      // ponytail: simple-peer destroy() is idempotent (checks this.destroyed internally)
+      offer.peer.destroy();
+      offer.state = 'cancelled';
+      this._offers.delete(offerId);
+      cancelled = true;
     }
-    const timer = this._offerTimers.get(offerId);
-    if (timer) {
-      clearTimeout(timer);
-      this._offerTimers.delete(offerId);
-    }
-    // Also clean up send state and answered offers
-    this._answeredOffers.delete(offerId);
-    const state = this._sendStates.get(offerId);
-    if (state) {
-      (state.peer as any).removeAllListeners('drain');
+    // ponytail: belt-and-suspenders — _sendStates keys are peerIds, not offerIds,
+    // but clean up by offerId too in case they're temporarily keyed that way.
+    const ss = this._sendStates.get(offerId);
+    if (ss) {
+      (ss.peer as any).removeAllListeners('drain');
       this._sendStates.delete(offerId);
     }
+    return { cancelled };
   }
 
   /** Feed a signal to a specific connection. Host uses offerId; peer uses 'host'. */
@@ -214,9 +262,9 @@ export class P2PRoom implements Room {
         peer.signal(signal);
         return;
       }
-      const pending = this._pendingOffers.get(connectionId);
+      const pending = this._offers.get(connectionId);
       if (pending) {
-        pending.signal(signal);
+        pending.peer.signal(signal);
         return;
       }
       this._onError?.(new Error(`No connection found for ${connectionId}`));
@@ -355,6 +403,10 @@ export class P2PRoom implements Room {
     this._onPeerJoin = handler;
   }
 
+  onOfferAnswered(handler: (offerId: string) => void): void {
+    this._onOfferAnswered = handler;
+  }
+
   close(): void {
     // Clean up send states
     for (const state of this._sendStates.values()) {
@@ -368,15 +420,15 @@ export class P2PRoom implements Room {
       this._hostSendState = undefined;
     }
 
-    for (const t of this._offerTimers.values()) clearTimeout(t);
-    this._offerTimers.clear();
-    for (const p of this._pendingOffers.values()) p.destroy();
+    for (const o of this._offers.values()) {
+      if (o.timer) clearTimeout(o.timer);
+      o.peer.destroy();
+    }
     for (const p of this._peers.values()) p.destroy();
     this._peer?.destroy();
-    this._pendingOffers.clear();
+    this._offers.clear();
     this._peers.clear();
     this._peerInfos = [];
-    this._answeredOffers.clear();
     this._onClose?.();
   }
 
@@ -436,6 +488,52 @@ export class P2PRoom implements Room {
   getIceConnectionState(peerId?: string): RTCIceConnectionState | 'unknown' {
     const pc = this._getPC(peerId);
     return pc?.iceConnectionState ?? 'unknown';
+  }
+
+  getIceConfigurationSummary(): IceConfigurationSummary {
+    let stunCount = 0;
+    let turnCount = 0;
+    let hasCredentials = false;
+    for (const server of this._rtcConfig.iceServers ?? []) {
+      if (server?.username || (server as any)?.credential) hasCredentials = true;
+      if (!server?.urls) continue;
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      for (const u of urls) {
+        const s = String(u);
+        if (s.startsWith('turn') || s.startsWith('turns')) turnCount++;
+        else if (s.startsWith('stun') || s.startsWith('stuns')) stunCount++;
+      }
+    }
+    return {
+      mode: this._iceMode,
+      transportPolicy: (this._rtcConfig.iceTransportPolicy ?? 'all') as RTCIceTransportPolicy,
+      stunCount,
+      turnCount,
+      hasTurnCredentials: hasCredentials,
+    };
+  }
+
+  async getCandidateSummary(peerId?: string): Promise<CandidateSummary> {
+    const pc = this._getPC(peerId);
+    if (!pc) return { host: 0, srflx: 0, relay: 0, udp: 0, tcp: 0 };
+    try {
+      const stats = await pc.getStats();
+      const summary = { host: 0, srflx: 0, relay: 0, udp: 0, tcp: 0 };
+      for (const report of stats.values()) {
+        if (report.type === 'local-candidate' || report.type === 'remote-candidate') {
+          const ct = report.candidateType;
+          if (ct === 'host') summary.host++;
+          else if (ct === 'srflx') summary.srflx++;
+          else if (ct === 'relay') summary.relay++;
+          const proto = report.protocol;
+          if (proto === 'udp') summary.udp++;
+          else if (proto === 'tcp') summary.tcp++;
+        }
+      }
+      return summary;
+    } catch {
+      return { host: 0, srflx: 0, relay: 0, udp: 0, tcp: 0 };
+    }
   }
 
   // ── Internal ──
@@ -550,10 +648,11 @@ export class P2PRoom implements Room {
       id: peerId,
       send: (d: string | Uint8Array) => peer.send(d),
     });
-    this._answeredOffers.delete(offerId);
-    this._pendingOffers.delete(offerId);
-    const timer = this._offerTimers.get(offerId);
-    if (timer) { clearTimeout(timer); this._offerTimers.delete(offerId); }
+    const offer = this._offers.get(offerId);
+    if (offer) {
+      offer.state = 'connected';
+      if (offer.timer) { clearTimeout(offer.timer); offer.timer = undefined; }
+    }
 
     // Initialize send state and register close/data handlers BEFORE awaiting
     // onPeerJoin so cleanup works even if close fires during the join callback.

@@ -146,9 +146,9 @@ describe('host promote cycle (offer → accept → connect → close)', () => {
       const answerB64 = btoa(JSON.stringify({ type: 'answer', sdp: 'peer-sdp' }));
       room.acceptAnswer(offerId, `#sdp=${answerB64}`);
 
-      expect((room as any)._pendingOffers.has(offerId)).toBe(true);
-      expect((room as any)._answeredOffers.has(offerId)).toBe(
-        true,
+      expect((room as any)._offers.has(offerId)).toBe(true);
+      expect((room as any)._offers.get(offerId).state).toBe(
+        'answered',
         `cycle ${i}: offer should be marked answered`,
       );
 
@@ -156,9 +156,9 @@ describe('host promote cycle (offer → accept → connect → close)', () => {
       const connectFn = mockPeerEvents[mockPeerEvents.length - 1]?.get('connect');
       connectFn?.();
 
-      expect((room as any)._pendingOffers.has(offerId)).toBe(
-        false,
-        `cycle ${i}: offer should be removed after connect`,
+      expect((room as any)._offers.get(offerId).state).toBe(
+        'connected',
+        `cycle ${i}: offer should be marked connected after connect`,
       );
       expect(room.peers.length).toBe(1);
       const peerId = room.peers[0].id;
@@ -171,7 +171,7 @@ describe('host promote cycle (offer → accept → connect → close)', () => {
       expect((room as any)._peers.size).toBe(0, `cycle ${i}: _peers should be empty`);
       expect((room as any)._peerInfos.length).toBe(0, `cycle ${i}: _peerInfos should be empty`);
       expect((room as any)._sendStates.size).toBe(0, `cycle ${i}: _sendStates should be empty`);
-      expect((room as any)._answeredOffers.size).toBe(0, `cycle ${i}: _answeredOffers should be empty`);
+      expect([...(room as any)._offers.values()].filter((r) => r.state === 'answered').length).toBe(0, `cycle ${i}: _answeredOffers should be empty`);
     }
 
     // After all cycles: still zero
@@ -713,9 +713,9 @@ describe('close() full cleanup', () => {
     expect((room as any)._peers.size).toBe(0);
     expect((room as any)._peerInfos).toEqual([]);
     expect((room as any)._sendStates.size).toBe(0);
-    expect((room as any)._pendingOffers.size).toBe(0);
-    expect((room as any)._offerTimers.size).toBe(0);
-    expect((room as any)._answeredOffers.size).toBe(0);
+    expect((room as any)._offers.size).toBe(0);
+    expect([...(room as any)._offers.values()].filter((r) => r.timer).length).toBe(0);
+    expect([...(room as any)._offers.values()].filter((r) => r.state === 'answered').length).toBe(0);
   });
 
   it('close() clears pending offers and their timers', async () => {
@@ -730,13 +730,13 @@ describe('close() full cleanup', () => {
       await room.offerUrl();
     }
 
-    expect((room as any)._pendingOffers.size).toBe(2);
-    expect((room as any)._offerTimers.size).toBe(2);
+    expect((room as any)._offers.size).toBe(2);
+    expect([...(room as any)._offers.values()].filter((r) => r.timer).length).toBe(2);
 
     room.close();
 
-    expect((room as any)._pendingOffers.size).toBe(0);
-    expect((room as any)._offerTimers.size).toBe(0);
+    expect((room as any)._offers.size).toBe(0);
+    expect([...(room as any)._offers.values()].filter((r) => r.timer).length).toBe(0);
   });
 
   it('repeated close() is idempotent', async () => {
@@ -773,13 +773,13 @@ describe('cancelOffer cleanup', () => {
     }, 5);
     const { offerId } = await room.offerUrl();
 
-    expect((room as any)._pendingOffers.has(offerId)).toBe(true);
-    expect((room as any)._offerTimers.has(offerId)).toBe(true);
+    expect((room as any)._offers.has(offerId)).toBe(true);
+    expect((room as any)._offers.get(offerId)?.timer !== undefined).toBe(true);
 
     room.cancelOffer(offerId);
 
-    expect((room as any)._pendingOffers.has(offerId)).toBe(false);
-    expect((room as any)._offerTimers.has(offerId)).toBe(false);
+    expect((room as any)._offers.has(offerId)).toBe(false);
+    expect((room as any)._offers.get(offerId)?.timer !== undefined).toBe(false);
   });
 
   it('cancelOffer frees a slot for new offers', async () => {
@@ -816,12 +816,10 @@ describe('cancelOffer cleanup', () => {
     (room as any)._sendStates.set('some-offer-id', {
       peer: p, peerId: 'some-offer-id', queue: [], queuedBytes: 0, draining: false, connected: true,
     });
-    (room as any)._answeredOffers.add('some-offer-id');
 
     room.cancelOffer('some-offer-id');
 
     expect((room as any)._sendStates.has('some-offer-id')).toBe(false);
-    expect((room as any)._answeredOffers.has('some-offer-id')).toBe(false);
     expect(p.removeAllListeners).toHaveBeenCalledWith('drain');
   });
 });
