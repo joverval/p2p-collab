@@ -167,7 +167,6 @@ export class P2PRoom implements Room {
     return new Promise((resolve, reject) => {
       const offerId = uuid();
       const peer = new SimplePeer({ initiator: true, trickle: this._trickle, config: this._rtcConfig });
-      this._attachStateCallbacks(peer, undefined);
       const record: OfferRecord = { peer, state: 'pending', createdAt: Date.now() };
       this._offers.set(offerId, record);
 
@@ -228,6 +227,8 @@ export class P2PRoom implements Room {
     offer.state = 'answered';
     offer.answeredAt = Date.now();
     if (offer.timer) { clearTimeout(offer.timer); offer.timer = undefined; }
+    // Attach ICE monitoring now that the offer is answered — enables DC fallback
+    this._attachStateCallbacks(offer.peer, offerId);
     offer.peer.signal(data);
     this._onOfferAnswered?.(offerId);
   }
