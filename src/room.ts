@@ -354,7 +354,7 @@ export class P2PRoom implements Room {
     return this._peerInfos;
   }
 
-  send(data: string | Uint8Array): SendResult { window.__ROOM_SEND = (window.__ROOM_SEND||0)+1; 
+  send(data: string | Uint8Array): SendResult {
     const prefix = data instanceof Uint8Array ? data[0]?.toString(16) : 'str';
     console.log(`[p2p] room.send(${data instanceof Uint8Array ? data.length : data.length} bytes, prefix 0x${prefix}) isHost=${this.isHost} sendStates=${this._sendStates.size} hostSendState=${!!this._hostSendState}`);
     if (this.isHost) {
@@ -648,7 +648,6 @@ export class P2PRoom implements Room {
     this._hostSendState = { peer, peerId: 'host', queue: [], queuedBytes: 0, draining: false, connected: true };
     this._attachDrainHandler(this._hostSendState);
     console.log('[p2p] _initPeerSendState: host send state set up');
-    peer.on("data", (data) => { window.__RECV_CALLED = (window.__RECV_CALLED||0)+1;  this._onMessage?.(data, 'host'); });
     this._onConnect?.();
   }
 
@@ -660,30 +659,22 @@ export class P2PRoom implements Room {
     });
   }
 
-    private _sendToState(state: PeerSendState, data: string | Uint8Array): SendResult { window.__SENDTOSTATE_CALLED = (window.__SENDTOSTATE_CALLED||0)+1; console.log(">>> _sendToState ENTERED connected="+state.connected+" queue="+state.queue.length); 
-    const byteLength = typeof data === 'string'
-      ? new TextEncoder().encode(data).length
-      : data.length;
+    private _sendToState(state: PeerSendState, data: string | Uint8Array): SendResult {
+        const byteLength = typeof data === 'string'
+          ? new TextEncoder().encode(data).length
+          : data.length;
 
-    if (state.connected && state.queue.length === 0) {
-      const wrote = (state.peer as any).write?.(data);
-      if (wrote === false) {
-        state.draining = true;
+        if (state.connected && state.queue.length === 0) {
+          // Always use send() — SimplePeer extends stream.Duplex and its write()
+          // caches only the last chunk in _chunk when _connected is false, losing
+          // all intermediate data. send() hits _channel.send() directly.
+          (state.peer as any).send(data);
+          const buf = (state.peer as any)._channel?.bufferedAmount ?? (state.peer as any).bufferSize ?? 0;
+          return { status: 'accepted', bufferedAmount: buf };
+        }
+
         return this._enqueue(state, data, byteLength);
       }
-      // write() returned true or is not available (fallback to send)
-      if (wrote === undefined) { window.__SEND_CALLED = (window.__SEND_CALLED||0)+1; 
-        // SimplePeer without write(): use send() directly
-        console.log('>>> SENDING DATA to', state.peerId, byteLength, 'bytes');
-        (state.peer as any).send?.(data);
-      }
-      const buf = (state.peer as any)._channel?.bufferedAmount ?? (state.peer as any).bufferSize ?? 0;
-      return { status: 'accepted', bufferedAmount: buf };
-    }
-
-    return this._enqueue(state, data, byteLength);
-  }
-
   private _enqueue(state: PeerSendState, data: string | Uint8Array, byteLength: number): SendResult {
     if (state.queuedBytes + byteLength > this._maxQueuedBytes) {
       return {
@@ -693,35 +684,18 @@ export class P2PRoom implements Room {
       };
     }
     state.queuedBytes += byteLength;
-    if (state.connected) {
-      // Connected: push through write() immediately
-      const wrote = (state.peer as any).write?.(data);
-      if (wrote === false) {
-        state.draining = true;
-        state.queue.push({ data, byteLength });
-        return { status: 'queued', bufferedAmount: state.queuedBytes };
-      }
-      // If write returned true or is unavailable, data was accepted
-      // Still count as queued since we had backlog
-      return { status: 'queued', bufferedAmount: state.queuedBytes };
-    }
-    // Pre-connect: store in queue
     state.queue.push({ data, byteLength });
+    if (state.connected) {
+      (state.peer as any).send(data);
+    }
     return { status: 'queued', bufferedAmount: state.queuedBytes };
   }
 
   private _flushQueue(state: PeerSendState): void {
-    while (state.queue.length > 0 && !state.draining) {
+    while (state.queue.length > 0) {
       const msg = state.queue.shift()!;
       state.queuedBytes -= msg.byteLength;
-      const wrote = (state.peer as any).write?.(msg.data);
-      if (wrote === false) {
-        state.draining = true;
-        // Put it back at front
-        state.queue.unshift(msg);
-        state.queuedBytes += msg.byteLength;
-        break;
-      }
+      (state.peer as any).send(msg.data);
     }
   }
 
