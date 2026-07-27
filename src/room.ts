@@ -612,6 +612,23 @@ export class P2PRoom implements Room {
                 break;
               }
             }
+          } else {
+            console.log(`[p2p] host _channel=${ch ? ch.readyState : 'null'} — polling for open...`);
+            let hostAttempts = 0;
+            const hostPoll = setInterval(() => {
+              const ch2 = (peer as any)._channel;
+              if (ch2 && ch2.readyState === 'open') {
+                clearInterval(hostPoll);
+                console.log(`[p2p] host data channel opened after ${hostAttempts * 250}ms`);
+                for (const [offerId, offer] of this._offers) {
+                  if (offer.peer === peer && (offer.state === 'pending' || offer.state === 'answered')) {
+                    this._onPeerConnected(offerId, peer);
+                    break;
+                  }
+                }
+              }
+              if (++hostAttempts > 40) { clearInterval(hostPoll); } // 10s timeout
+            }, 250);
           }
         }
       }

@@ -595,6 +595,25 @@ var P2PRoom = class {
                 break;
               }
             }
+          } else {
+            console.log(`[p2p] host _channel=${ch ? ch.readyState : "null"} \u2014 polling for open...`);
+            let hostAttempts = 0;
+            const hostPoll = setInterval(() => {
+              const ch2 = peer._channel;
+              if (ch2 && ch2.readyState === "open") {
+                clearInterval(hostPoll);
+                console.log(`[p2p] host data channel opened after ${hostAttempts * 250}ms`);
+                for (const [offerId, offer] of this._offers) {
+                  if (offer.peer === peer && (offer.state === "pending" || offer.state === "answered")) {
+                    this._onPeerConnected(offerId, peer);
+                    break;
+                  }
+                }
+              }
+              if (++hostAttempts > 40) {
+                clearInterval(hostPoll);
+              }
+            }, 250);
           }
         }
       }
