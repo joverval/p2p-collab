@@ -561,11 +561,13 @@ export class P2PRoom implements Room {
         this._onConnectionStateChange?.(pc.connectionState, peerId);
       };
     }
-    if (this._onIceConnectionStateChange) {
-      pc.oniceconnectionstatechange = () => {
-        this._onIceConnectionStateChange?.(pc.iceConnectionState, peerId);
-      };
-    }
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[p2p] ICE state → ${pc.iceConnectionState} (peer ${peerId || 'host'})`);
+      this._onIceConnectionStateChange?.(pc.iceConnectionState, peerId);
+    };
+    pc.onicegatheringstatechange = () => {
+      console.log(`[p2p] ICE gathering → ${pc.iceGatheringState} (peer ${peerId || 'host'})`);
+    };
   }
 
   private _attachDrainHandler(state: PeerSendState): void {
