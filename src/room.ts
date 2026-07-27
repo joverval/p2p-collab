@@ -559,23 +559,23 @@ export class P2PRoom implements Room {
           const ch = (peer as any)._channel;
           if (ch) {
             if (ch.readyState === 'open') {
-              console.log('[p2p] data channel already open — initializing send state from ICE');
+              // DEBUG: console.log("[p2p] data channel already open — initializing send state from ICE');
               this._initPeerSendState(peer);
             } else {
-              console.log(`[p2p] data channel state: ${ch.readyState} — waiting for open`);
+              // DEBUG: console.log("[p2p] data channel state: ${ch.readyState} — waiting for open`);
               ch.addEventListener('open', () => {
                 console.log('[p2p] data channel opened — initializing send state');
                 this._initPeerSendState(peer);
               }, { once: true });
             }
           } else {
-            console.log('[p2p] _channel is null — polling for datachannel...');
+            // DEBUG: console.log("[p2p] _channel is null — polling for datachannel...');
             let attempts = 0;
             const poll = setInterval(() => {
               const ch2 = (peer as any)._channel;
               if (ch2) {
                 clearInterval(poll);
-                console.log(`[p2p] _channel found after ${attempts * 250}ms, state: ${ch2.readyState}`);
+                // DEBUG: console.log("[p2p] _channel found after ${attempts * 250}ms, state: ${ch2.readyState}`);
                 if (ch2.readyState === 'open') {
                   this._initPeerSendState(peer);
                 } else {
@@ -595,19 +595,19 @@ export class P2PRoom implements Room {
           if (ch && ch.readyState === 'open') {
             for (const [offerId, offer] of this._offers) {
               if (offer.peer === peer && (offer.state === 'pending' || offer.state === 'answered')) {
-                console.log(`[p2p] host data channel open — triggering _onPeerConnected for ${offerId}`);
+                // DEBUG: console.log("[p2p] host data channel open — triggering _onPeerConnected for ${offerId}`);
                 this._onPeerConnected(offerId, peer);
                 break;
               }
             }
           } else {
-            console.log(`[p2p] host _channel=${ch ? ch.readyState : 'null'} — polling for open...`);
+            // DEBUG: console.log("[p2p] host _channel=${ch ? ch.readyState : 'null'} — polling for open...`);
             let hostAttempts = 0;
             const hostPoll = setInterval(() => {
               const ch2 = (peer as any)._channel;
               if (ch2 && ch2.readyState === 'open') {
                 clearInterval(hostPoll);
-                console.log(`[p2p] host data channel opened after ${hostAttempts * 250}ms`);
+                // DEBUG: // DEBUG: console.log("[p2p] host data channel opened after ${hostAttempts * 250}ms`);
                 for (const [offerId, offer] of this._offers) {
                   if (offer.peer === peer && (offer.state === 'pending' || offer.state === 'answered')) {
                     this._onPeerConnected(offerId, peer);
@@ -633,7 +633,7 @@ export class P2PRoom implements Room {
     this._hostSendState = { peer, peerId: 'host', queue: [], queuedBytes: 0, draining: false, connected: true };
     this._attachDrainHandler(this._hostSendState);
     peer.on('data', (data: Uint8Array) => {
-      console.log(`[p2p] RECEIVED ${data.length}b from host`);
+      // DEBUG: console.log("[p2p] RECEIVED ${data.length}b from host`);
       this._onMessage?.(data, 'host');
     });
     this._onConnect?.();
@@ -714,7 +714,7 @@ export class P2PRoom implements Room {
       connected: true,
     };
     this._sendStates.set(peerId, sendState);
-    console.log(`[p2p] SENDSTATE added peerId=${peerId} total=${this._sendStates.size} destroying=${(peer as any).destroying}`);
+    // DEBUG: console.log("[p2p] SENDSTATE added peerId=${peerId} total=${this._sendStates.size} destroying=${(peer as any).destroying}`);
     this._attachDrainHandler(sendState);
 
     peer.on("data", (data) => { 
