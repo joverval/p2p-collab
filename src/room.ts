@@ -651,6 +651,8 @@ export class P2PRoom implements Room {
           // Always use send() — SimplePeer extends stream.Duplex and its write()
           // caches only the last chunk in _chunk when _connected is false, losing
           // all intermediate data. send() hits _channel.send() directly.
+          (state.peer as any).send(data);
+          const buf = (state.peer as any)._channel?.bufferedAmount ?? (state.peer as any).bufferSize ?? 0;
           return { status: 'accepted', bufferedAmount: buf };
         }
 
