@@ -660,7 +660,7 @@ export class P2PRoom implements Room {
     });
   }
 
-  private _sendToState(state: PeerSendState, data: string | Uint8Array): SendResult {
+    private _sendToState(state: PeerSendState, data: string | Uint8Array): SendResult { window.__SENDTOSTATE_CALLED = (window.__SENDTOSTATE_CALLED||0)+1; console.log(">>> _sendToState ENTERED connected="+state.connected+" queue="+state.queue.length); 
     const byteLength = typeof data === 'string'
       ? new TextEncoder().encode(data).length
       : data.length;
