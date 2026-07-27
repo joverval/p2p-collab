@@ -355,6 +355,8 @@ export class P2PRoom implements Room {
   }
 
   send(data: string | Uint8Array): SendResult {
+    const prefix = data instanceof Uint8Array ? data[0]?.toString(16) : 'str';
+    console.log(`[p2p] room.send(${data instanceof Uint8Array ? data.length : data.length} bytes, prefix 0x${prefix}) isHost=${this.isHost} sendStates=${this._sendStates.size} hostSendState=${!!this._hostSendState}`);
     if (this.isHost) {
       let anyAccepted = false;
       let anyQueued = false;
