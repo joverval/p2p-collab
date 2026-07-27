@@ -318,7 +318,7 @@ export class P2PRoom implements Room {
         this._attachDrainHandler(this._hostSendState);
         this._flushQueue(this._hostSendState);
 
-        peer.on('data', (data: Uint8Array) => {
+        peer.on("data", (data) => { window.__RECV_CALLED = (window.__RECV_CALLED||0)+1; 
           this._onMessage?.(data, 'host');
         });
         this._onConnect?.();
@@ -648,7 +648,7 @@ export class P2PRoom implements Room {
     this._hostSendState = { peer, peerId: 'host', queue: [], queuedBytes: 0, draining: false, connected: true };
     this._attachDrainHandler(this._hostSendState);
     console.log('[p2p] _initPeerSendState: host send state set up');
-    peer.on('data', (data: Uint8Array) => { this._onMessage?.(data, 'host'); });
+    peer.on("data", (data) => { window.__RECV_CALLED = (window.__RECV_CALLED||0)+1;  this._onMessage?.(data, 'host'); });
     this._onConnect?.();
   }
 
@@ -672,11 +672,10 @@ export class P2PRoom implements Room {
         return this._enqueue(state, data, byteLength);
       }
       // write() returned true or is not available (fallback to send)
-      if (wrote === undefined) {
+      if (wrote === undefined) { window.__SEND_CALLED = (window.__SEND_CALLED||0)+1; 
         // SimplePeer without write(): use send() directly
-        console.log(`[p2p] _sendToState: calling send(${byteLength} bytes) to ${state.peerId}`);
+        console.log('>>> SENDING DATA to', state.peerId, byteLength, 'bytes');
         (state.peer as any).send?.(data);
-        console.log(`[p2p] _sendToState: send() returned, buffered=${(state.peer as any)._channel?.bufferedAmount ?? '?'}`);
       }
       const buf = (state.peer as any)._channel?.bufferedAmount ?? (state.peer as any).bufferSize ?? 0;
       return { status: 'accepted', bufferedAmount: buf };
@@ -757,7 +756,7 @@ export class P2PRoom implements Room {
     this._attachDrainHandler(sendState);
     console.log(`[p2p] _onPeerConnected: send state added for ${peerId}, _sendStates.size=${this._sendStates.size}`);
 
-    peer.on('data', (data: Uint8Array) => {
+    peer.on("data", (data) => { window.__RECV_CALLED = (window.__RECV_CALLED||0)+1; 
       this._onMessage?.(data, peerId);
     });
 
