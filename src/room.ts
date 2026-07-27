@@ -733,7 +733,6 @@ export class P2PRoom implements Room {
       id: peerId,
       send: (d: string | Uint8Array) => peer.send(d),
     });
-    const offer = this._offers.get(offerId);
     if (offer) {
       offer.state = 'connected';
       if (offer.timer) { clearTimeout(offer.timer); offer.timer = undefined; }
