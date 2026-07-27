@@ -645,6 +645,7 @@ export class P2PRoom implements Room {
     if (this._hostSendState) return;
     this._hostSendState = { peer, peerId: 'host', queue: [], queuedBytes: 0, draining: false, connected: true };
     this._attachDrainHandler(this._hostSendState);
+    console.log('[p2p] _initPeerSendState: host send state set up');
     peer.on('data', (data: Uint8Array) => { this._onMessage?.(data, 'host'); });
     this._onConnect?.();
   }
@@ -752,6 +753,7 @@ export class P2PRoom implements Room {
     };
     this._sendStates.set(peerId, sendState);
     this._attachDrainHandler(sendState);
+    console.log(`[p2p] _onPeerConnected: send state added for ${peerId}, _sendStates.size=${this._sendStates.size}`);
 
     peer.on('data', (data: Uint8Array) => {
       this._onMessage?.(data, peerId);
