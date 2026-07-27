@@ -167,6 +167,7 @@ export class P2PRoom implements Room {
     return new Promise((resolve, reject) => {
       const offerId = uuid();
       const peer = new SimplePeer({ initiator: true, trickle: this._trickle, config: this._rtcConfig });
+      this._attachStateCallbacks(peer, undefined);
       const record: OfferRecord = { peer, state: 'pending', createdAt: Date.now() };
       this._offers.set(offerId, record);
 

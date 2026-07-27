@@ -185,6 +185,7 @@ var P2PRoom = class {
     return new Promise((resolve, reject) => {
       const offerId = uuid();
       const peer = new import_simple_peer.default({ initiator: true, trickle: this._trickle, config: this._rtcConfig });
+      this._attachStateCallbacks(peer, void 0);
       const record = { peer, state: "pending", createdAt: Date.now() };
       this._offers.set(offerId, record);
       record.timer = setTimeout(() => {
