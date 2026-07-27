@@ -587,6 +587,15 @@ export class P2PRoom implements Room {
     };
   }
 
+  /** Initialize the peer→host send state (idempotent — only sets if not already present). */
+  private _initPeerSendState(peer: InstanceType<typeof SimplePeer>): void {
+    if (this._hostSendState) return;
+    this._hostSendState = { peer, peerId: 'host', queue: [], queuedBytes: 0, draining: false, connected: true };
+    this._attachDrainHandler(this._hostSendState);
+    peer.on('data', (data: Uint8Array) => { this._onMessage?.(data, 'host'); });
+    this._onConnect?.();
+  }
+
   private _attachDrainHandler(state: PeerSendState): void {
     (state.peer as any).on('drain', () => {
       state.draining = false;

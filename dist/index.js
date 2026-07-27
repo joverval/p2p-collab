@@ -526,6 +526,16 @@ var P2PRoom = class {
       console.log(`[p2p] ICE gathering \u2192 ${pc.iceGatheringState} (peer ${peerId || "host"})`);
     };
   }
+  /** Initialize the peer→host send state (idempotent — only sets if not already present). */
+  _initPeerSendState(peer) {
+    if (this._hostSendState) return;
+    this._hostSendState = { peer, peerId: "host", queue: [], queuedBytes: 0, draining: false, connected: true };
+    this._attachDrainHandler(this._hostSendState);
+    peer.on("data", (data) => {
+      this._onMessage?.(data, "host");
+    });
+    this._onConnect?.();
+  }
   _attachDrainHandler(state) {
     state.peer.on("drain", () => {
       state.draining = false;
