@@ -563,6 +563,23 @@ export class P2PRoom implements Room {
     }
     pc.oniceconnectionstatechange = () => {
       console.log(`[p2p] ICE state → ${pc.iceConnectionState} (peer ${peerId || 'host'})`);
+      // Fallback: if ICE connects but SimplePeer 'connect' hasn't fired yet,
+      // set up the send state early so data can flow.
+      if (pc.iceConnectionState === 'connected' && !this.isHost && !this._hostSendState) {
+        const ch = (peer as any)._channel;
+        if (ch) {
+          if (ch.readyState === 'open') {
+            console.log('[p2p] data channel already open — initializing send state from ICE');
+            this._initPeerSendState(peer);
+          } else {
+            console.log(`[p2p] data channel state: ${ch.readyState} — waiting for open`);
+            ch.addEventListener('open', () => {
+              console.log('[p2p] data channel opened — initializing send state');
+              this._initPeerSendState(peer);
+            }, { once: true });
+          }
+        }
+      }
       this._onIceConnectionStateChange?.(pc.iceConnectionState, peerId);
     };
     pc.onicegatheringstatechange = () => {

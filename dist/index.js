@@ -505,6 +505,21 @@ var P2PRoom = class {
     }
     pc.oniceconnectionstatechange = () => {
       console.log(`[p2p] ICE state \u2192 ${pc.iceConnectionState} (peer ${peerId || "host"})`);
+      if (pc.iceConnectionState === "connected" && !this.isHost && !this._hostSendState) {
+        const ch = peer._channel;
+        if (ch) {
+          if (ch.readyState === "open") {
+            console.log("[p2p] data channel already open \u2014 initializing send state from ICE");
+            this._initPeerSendState(peer);
+          } else {
+            console.log(`[p2p] data channel state: ${ch.readyState} \u2014 waiting for open`);
+            ch.addEventListener("open", () => {
+              console.log("[p2p] data channel opened \u2014 initializing send state");
+              this._initPeerSendState(peer);
+            }, { once: true });
+          }
+        }
+      }
       this._onIceConnectionStateChange?.(pc.iceConnectionState, peerId);
     };
     pc.onicegatheringstatechange = () => {
