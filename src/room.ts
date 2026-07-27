@@ -722,6 +722,10 @@ export class P2PRoom implements Room {
   }
 
   private async _onPeerConnected(offerId: string, peer: InstanceType<typeof SimplePeer>): Promise<void> {
+    // Idempotent: skip if this offer is already connected
+    const offer = this._offers.get(offerId);
+    if (offer && offer.state === 'connected') return;
+    
     const peerId = uuid();
     this._attachStateCallbacks(peer, peerId);
     this._peers.set(peerId, peer);
