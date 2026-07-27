@@ -632,6 +632,10 @@ export class P2PRoom implements Room {
     if (this._hostSendState) return;
     this._hostSendState = { peer, peerId: 'host', queue: [], queuedBytes: 0, draining: false, connected: true };
     this._attachDrainHandler(this._hostSendState);
+    peer.on('data', (data: Uint8Array) => {
+      console.log(`[p2p] RECEIVED ${data.length}b from host`);
+      this._onMessage?.(data, 'host');
+    });
     this._onConnect?.();
   }
 
