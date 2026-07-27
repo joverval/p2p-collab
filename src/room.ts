@@ -2,6 +2,12 @@ import SimplePeer from 'simple-peer';
 import { encodeSignal, decodeSignal } from './signal';
 import type { Room, RoomOptions, PeerInfo, SignalData, ConnectionRoute, BroadcastResult, SendResult, IceMode, CancelOfferResult, IceConfigurationSummary, CandidateSummary } from './types';
 
+// DEBUG CONVENTION: transient debug logs are prefixed with `// DEBUG:`
+// to distinguish from production diagnostics (ICE state, send status).
+// Remove all `// DEBUG:` lines before release: grep -v '// DEBUG:'
+// NEVER run sed/grep that matches `console.log(` alone — it can delete
+// critical handlers like `peer.on('data', ...)`. Always use targeted patterns.
+
 const DEFAULT_ICE_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
