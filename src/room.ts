@@ -606,7 +606,7 @@ export class P2PRoom implements Room {
           const ch = (peer as any)._channel;
           if (ch && ch.readyState === 'open') {
             for (const [offerId, offer] of this._offers) {
-              if (offer.peer === peer && offer.state === 'pending') {
+              if (offer.peer === peer && (offer.state === 'pending' || offer.state === 'answered')) {
                 console.log(`[p2p] host data channel open — triggering _onPeerConnected for ${offerId}`);
                 this._onPeerConnected(offerId, peer);
                 break;
