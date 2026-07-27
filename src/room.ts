@@ -671,7 +671,9 @@ export class P2PRoom implements Room {
       // write() returned true or is not available (fallback to send)
       if (wrote === undefined) {
         // SimplePeer without write(): use send() directly
+        console.log(`[p2p] _sendToState: calling send(${byteLength} bytes) to ${state.peerId}`);
         (state.peer as any).send?.(data);
+        console.log(`[p2p] _sendToState: send() returned, buffered=${(state.peer as any)._channel?.bufferedAmount ?? '?'}`);
       }
       const buf = (state.peer as any)._channel?.bufferedAmount ?? (state.peer as any).bufferSize ?? 0;
       return { status: 'accepted', bufferedAmount: buf };
