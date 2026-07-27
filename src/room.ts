@@ -306,22 +306,8 @@ export class P2PRoom implements Room {
       });
 
       peer.on('connect', () => {
-        // Initialize host send state
-        this._hostSendState = {
-          peer,
-          peerId: 'host',
-          queue: [],
-          queuedBytes: 0,
-          draining: false,
-          connected: true,
-        };
-        this._attachDrainHandler(this._hostSendState);
-        this._flushQueue(this._hostSendState);
-
-        peer.on("data", (data) => { window.__RECV_CALLED = (window.__RECV_CALLED||0)+1; 
-          this._onMessage?.(data, 'host');
-        });
-        this._onConnect?.();
+        // Delegate to _initPeerSendState — avoids duplicate setup
+        this._initPeerSendState(peer);
       });
 
       peer.on('error', (err: Error) => {
@@ -355,8 +341,6 @@ export class P2PRoom implements Room {
   }
 
   send(data: string | Uint8Array): SendResult {
-    const prefix = data instanceof Uint8Array ? data[0]?.toString(16) : 'str';
-    console.log(`[p2p] room.send(${data instanceof Uint8Array ? data.length : data.length} bytes, prefix 0x${prefix}) isHost=${this.isHost} sendStates=${this._sendStates.size} hostSendState=${!!this._hostSendState}`);
     if (this.isHost) {
       let anyAccepted = false;
       let anyQueued = false;
@@ -647,7 +631,6 @@ export class P2PRoom implements Room {
     if (this._hostSendState) return;
     this._hostSendState = { peer, peerId: 'host', queue: [], queuedBytes: 0, draining: false, connected: true };
     this._attachDrainHandler(this._hostSendState);
-    console.log('[p2p] _initPeerSendState: host send state set up');
     this._onConnect?.();
   }
 
@@ -668,8 +651,6 @@ export class P2PRoom implements Room {
           // Always use send() — SimplePeer extends stream.Duplex and its write()
           // caches only the last chunk in _chunk when _connected is false, losing
           // all intermediate data. send() hits _channel.send() directly.
-          (state.peer as any).send(data); console.log(">>> HOST SEND: sent "+byteLength+"b via send()");
-          const ch = (state.peer as any)._channel; console.log(">>> HOST channel=" + (ch ? ch.readyState : "null")); const buf = (state.peer as any)._channel?.bufferedAmount ?? (state.peer as any).bufferSize ?? 0;
           return { status: 'accepted', bufferedAmount: buf };
         }
 
@@ -686,7 +667,6 @@ export class P2PRoom implements Room {
     state.queuedBytes += byteLength;
     state.queue.push({ data, byteLength });
     if (state.connected) {
-      (state.peer as any).send(data); console.log(">>> HOST SEND: sent "+byteLength+"b via send()");
     }
     return { status: 'queued', bufferedAmount: state.queuedBytes };
   }
@@ -728,9 +708,8 @@ export class P2PRoom implements Room {
     };
     this._sendStates.set(peerId, sendState);
     this._attachDrainHandler(sendState);
-    console.log(`[p2p] _onPeerConnected: send state added for ${peerId}, _sendStates.size=${this._sendStates.size}`);
 
-    peer.on("data", (data) => { window.__RECV_CALLED = (window.__RECV_CALLED||0)+1; 
+    peer.on("data", (data) => { 
       this._onMessage?.(data, peerId);
     });
 
