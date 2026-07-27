@@ -578,6 +578,28 @@ export class P2PRoom implements Room {
               this._initPeerSendState(peer);
             }, { once: true });
           }
+        } else {
+          // _channel is null — SimplePeer hasn't created it yet.
+          // Poll for it (ondatachannel may fire after ICE connects).
+          console.log('[p2p] _channel is null — polling for datachannel...');
+          let attempts = 0;
+          const poll = setInterval(() => {
+            const ch2 = (peer as any)._channel;
+            if (ch2) {
+              clearInterval(poll);
+              console.log(`[p2p] _channel found after ${attempts * 250}ms, state: ${ch2.readyState}`);
+              if (ch2.readyState === 'open') {
+                this._initPeerSendState(peer);
+              } else {
+                ch2.addEventListener('open', () => {
+                  console.log('[p2p] data channel opened — initializing send state');
+                  this._initPeerSendState(peer);
+                }, { once: true });
+              }
+            }
+            if (++attempts > 40) { clearInterval(poll); } // 10s timeout
+            if (this._hostSendState) { clearInterval(poll); } // already set up
+          }, 250);
         }
       }
       this._onIceConnectionStateChange?.(pc.iceConnectionState, peerId);

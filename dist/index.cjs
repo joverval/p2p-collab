@@ -558,6 +558,30 @@ var P2PRoom = class {
               this._initPeerSendState(peer);
             }, { once: true });
           }
+        } else {
+          console.log("[p2p] _channel is null \u2014 polling for datachannel...");
+          let attempts = 0;
+          const poll = setInterval(() => {
+            const ch2 = peer._channel;
+            if (ch2) {
+              clearInterval(poll);
+              console.log(`[p2p] _channel found after ${attempts * 250}ms, state: ${ch2.readyState}`);
+              if (ch2.readyState === "open") {
+                this._initPeerSendState(peer);
+              } else {
+                ch2.addEventListener("open", () => {
+                  console.log("[p2p] data channel opened \u2014 initializing send state");
+                  this._initPeerSendState(peer);
+                }, { once: true });
+              }
+            }
+            if (++attempts > 40) {
+              clearInterval(poll);
+            }
+            if (this._hostSendState) {
+              clearInterval(poll);
+            }
+          }, 250);
         }
       }
       this._onIceConnectionStateChange?.(pc.iceConnectionState, peerId);
