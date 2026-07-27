@@ -349,8 +349,9 @@ export class P2PRoom implements Room {
         if (r.status === 'accepted') anyAccepted = true;
         if (r.status === 'queued') anyQueued = true;
       }
-      if (anyAccepted) return { status: 'accepted' };
-      if (anyQueued) return { status: 'queued' };
+      if (anyAccepted) { console.log('[p2p] send: ACCEPTED'); return { status: 'accepted' }; }
+      if (anyQueued) { console.log('[p2p] send: QUEUED'); return { status: 'queued' }; }
+      console.log('[p2p] send: REJECTED no peers');
       return { status: 'rejected', reason: 'no peers connected' };
     } else if (this._hostSendState) {
       return this._sendToState(this._hostSendState, data);
@@ -709,6 +710,7 @@ export class P2PRoom implements Room {
       connected: true,
     };
     this._sendStates.set(peerId, sendState);
+    console.log(`[p2p] SENDSTATE added peerId=${peerId} total=${this._sendStates.size} destroying=${(peer as any).destroying}`);
     this._attachDrainHandler(sendState);
 
     peer.on("data", (data) => { 
