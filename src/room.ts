@@ -564,43 +564,55 @@ export class P2PRoom implements Room {
     }
     pc.oniceconnectionstatechange = () => {
       console.log(`[p2p] ICE state → ${pc.iceConnectionState} (peer ${peerId || 'host'})`);
-      // Fallback: if ICE connects but SimplePeer 'connect' hasn't fired yet,
-      // set up the send state early so data can flow.
-      if (pc.iceConnectionState === 'connected' && !this.isHost && !this._hostSendState) {
-        const ch = (peer as any)._channel;
-        if (ch) {
-          if (ch.readyState === 'open') {
-            console.log('[p2p] data channel already open — initializing send state from ICE');
-            this._initPeerSendState(peer);
-          } else {
-            console.log(`[p2p] data channel state: ${ch.readyState} — waiting for open`);
-            ch.addEventListener('open', () => {
-              console.log('[p2p] data channel opened — initializing send state');
+      
+      if (pc.iceConnectionState === 'connected') {
+        if (!this.isHost && !this._hostSendState) {
+          // Peer side fallback
+          const ch = (peer as any)._channel;
+          if (ch) {
+            if (ch.readyState === 'open') {
+              console.log('[p2p] data channel already open — initializing send state from ICE');
               this._initPeerSendState(peer);
-            }, { once: true });
-          }
-        } else {
-          // _channel is null — SimplePeer hasn't created it yet.
-          // Poll for it (ondatachannel may fire after ICE connects).
-          console.log('[p2p] _channel is null — polling for datachannel...');
-          let attempts = 0;
-          const poll = setInterval(() => {
-            const ch2 = (peer as any)._channel;
-            if (ch2) {
-              clearInterval(poll);
-              console.log(`[p2p] _channel found after ${attempts * 250}ms, state: ${ch2.readyState}`);
-              if (ch2.readyState === 'open') {
+            } else {
+              console.log(`[p2p] data channel state: ${ch.readyState} — waiting for open`);
+              ch.addEventListener('open', () => {
+                console.log('[p2p] data channel opened — initializing send state');
                 this._initPeerSendState(peer);
-              } else {
-                ch2.addEventListener('open', () => {
-                  console.log('[p2p] data channel opened — initializing send state');
+              }, { once: true });
+            }
+          } else {
+            console.log('[p2p] _channel is null — polling for datachannel...');
+            let attempts = 0;
+            const poll = setInterval(() => {
+              const ch2 = (peer as any)._channel;
+              if (ch2) {
+                clearInterval(poll);
+                console.log(`[p2p] _channel found after ${attempts * 250}ms, state: ${ch2.readyState}`);
+                if (ch2.readyState === 'open') {
                   this._initPeerSendState(peer);
-                }, { once: true });
+                } else {
+                  ch2.addEventListener('open', () => {
+                    console.log('[p2p] data channel opened — initializing send state');
+                    this._initPeerSendState(peer);
+                  }, { once: true });
+                }
+              }
+              if (++attempts > 40) { clearInterval(poll); }
+              if (this._hostSendState) { clearInterval(poll); }
+            }, 250);
+          }
+        } else if (this.isHost) {
+          // Host side fallback: find offer for this peer and fire _onPeerConnected early
+          const ch = (peer as any)._channel;
+          if (ch && ch.readyState === 'open') {
+            for (const [offerId, offer] of this._offers) {
+              if (offer.peer === peer && offer.state === 'pending') {
+                console.log(`[p2p] host data channel open — triggering _onPeerConnected for ${offerId}`);
+                this._onPeerConnected(offerId, peer);
+                break;
               }
             }
-            if (++attempts > 40) { clearInterval(poll); } // 10s timeout
-            if (this._hostSendState) { clearInterval(poll); } // already set up
-          }, 250);
+          }
         }
       }
       this._onIceConnectionStateChange?.(pc.iceConnectionState, peerId);

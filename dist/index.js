@@ -506,43 +506,56 @@ var P2PRoom = class {
     }
     pc.oniceconnectionstatechange = () => {
       console.log(`[p2p] ICE state \u2192 ${pc.iceConnectionState} (peer ${peerId || "host"})`);
-      if (pc.iceConnectionState === "connected" && !this.isHost && !this._hostSendState) {
-        const ch = peer._channel;
-        if (ch) {
-          if (ch.readyState === "open") {
-            console.log("[p2p] data channel already open \u2014 initializing send state from ICE");
-            this._initPeerSendState(peer);
-          } else {
-            console.log(`[p2p] data channel state: ${ch.readyState} \u2014 waiting for open`);
-            ch.addEventListener("open", () => {
-              console.log("[p2p] data channel opened \u2014 initializing send state");
+      if (pc.iceConnectionState === "connected") {
+        if (!this.isHost && !this._hostSendState) {
+          const ch = peer._channel;
+          if (ch) {
+            if (ch.readyState === "open") {
+              console.log("[p2p] data channel already open \u2014 initializing send state from ICE");
               this._initPeerSendState(peer);
-            }, { once: true });
-          }
-        } else {
-          console.log("[p2p] _channel is null \u2014 polling for datachannel...");
-          let attempts = 0;
-          const poll = setInterval(() => {
-            const ch2 = peer._channel;
-            if (ch2) {
-              clearInterval(poll);
-              console.log(`[p2p] _channel found after ${attempts * 250}ms, state: ${ch2.readyState}`);
-              if (ch2.readyState === "open") {
+            } else {
+              console.log(`[p2p] data channel state: ${ch.readyState} \u2014 waiting for open`);
+              ch.addEventListener("open", () => {
+                console.log("[p2p] data channel opened \u2014 initializing send state");
                 this._initPeerSendState(peer);
-              } else {
-                ch2.addEventListener("open", () => {
-                  console.log("[p2p] data channel opened \u2014 initializing send state");
+              }, { once: true });
+            }
+          } else {
+            console.log("[p2p] _channel is null \u2014 polling for datachannel...");
+            let attempts = 0;
+            const poll = setInterval(() => {
+              const ch2 = peer._channel;
+              if (ch2) {
+                clearInterval(poll);
+                console.log(`[p2p] _channel found after ${attempts * 250}ms, state: ${ch2.readyState}`);
+                if (ch2.readyState === "open") {
                   this._initPeerSendState(peer);
-                }, { once: true });
+                } else {
+                  ch2.addEventListener("open", () => {
+                    console.log("[p2p] data channel opened \u2014 initializing send state");
+                    this._initPeerSendState(peer);
+                  }, { once: true });
+                }
+              }
+              if (++attempts > 40) {
+                clearInterval(poll);
+              }
+              if (this._hostSendState) {
+                clearInterval(poll);
+              }
+            }, 250);
+          }
+        } else if (this.isHost) {
+          const ch = peer._channel;
+          if (ch && ch.readyState === "open") {
+            for (const [offerId, offer] of this._offers) {
+              if (offer.peer === peer && offer.state === "pending") {
+                console.log(`[p2p] host data channel open \u2014 triggering _onPeerConnected for ${offerId}`);
+                this._onPeerConnected(offerId, peer);
+                break;
               }
             }
-            if (++attempts > 40) {
-              clearInterval(poll);
-            }
-            if (this._hostSendState) {
-              clearInterval(poll);
-            }
-          }, 250);
+          }
         }
       }
       this._onIceConnectionStateChange?.(pc.iceConnectionState, peerId);
