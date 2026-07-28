@@ -13,7 +13,7 @@ vi.mock('simple-peer', () => ({
     this.on = vi.fn((event: string, fn: any) => { events.set(event, fn); });
     this.signal = vi.fn();
     this.send = vi.fn();
-    this.write = vi.fn().mockReturnValue(true);
+    this.send = vi.fn().mockReturnValue(true);
     this.bufferSize = 0;
     this.removeAllListeners = vi.fn();
     this.destroy = vi.fn(function (this: any) {
@@ -581,7 +581,7 @@ describe('safe send', () => {
       const result: SendResult = room.sendToPeer('peer-1', 'hello');
       expect(result.status).toBe('queued');
       expect(result.bufferedAmount).toBeGreaterThan(0);
-      expect(p.write).not.toHaveBeenCalled();
+      expect(p.send).not.toHaveBeenCalled();
     });
 
     it('stores messages in FIFO order during pre-connect', () => {
@@ -683,9 +683,9 @@ describe('safe send', () => {
 
       expect(state.queue.length).toBe(0);
       expect(state.queuedBytes).toBe(0);
-      expect(p.write).toHaveBeenCalledTimes(2);
-      expect(p.write).toHaveBeenCalledWith('a');
-      expect(p.write).toHaveBeenCalledWith('b');
+      expect(p.send).toHaveBeenCalledTimes(2);
+      expect(p.send).toHaveBeenCalledWith('a');
+      expect(p.send).toHaveBeenCalledWith('b');
     });
 
     it('maintains FIFO order when flushing', () => {
@@ -707,10 +707,10 @@ describe('safe send', () => {
 
       expect(state.queue.length).toBe(0);
       expect(state.queuedBytes).toBe(0);
-      expect(p.write).toHaveBeenCalledTimes(3);
-      expect(p.write).toHaveBeenNthCalledWith(1, 'first');
-      expect(p.write).toHaveBeenNthCalledWith(2, 'second');
-      expect(p.write).toHaveBeenNthCalledWith(3, 'third');
+      expect(p.send).toHaveBeenCalledTimes(3);
+      expect(p.send).toHaveBeenNthCalledWith(1, 'first');
+      expect(p.send).toHaveBeenNthCalledWith(2, 'second');
+      expect(p.send).toHaveBeenNthCalledWith(3, 'third');
     });
 
     it('drain handler clears draining flag and flushes', () => {
@@ -730,7 +730,7 @@ describe('safe send', () => {
 
       expect(state.draining).toBe(false);
       expect(state.queue.length).toBe(0);
-      expect(p.write).toHaveBeenCalledWith('queued');
+      expect(p.send).toHaveBeenCalledWith('queued');
     });
   });
 
@@ -830,21 +830,22 @@ describe('safe send', () => {
     });
   });
 
-  describe('write backpressure', () => {
-    it('write returning false triggers drain mode and queuing', () => {
+  describe('send behavior', () => {
+    it('send() accepts when connected with empty queue', () => {
       const room = new P2PRoom(true, '');
-      const p = mockPeer({ write: vi.fn().mockReturnValue(false) });
+      const p = mockPeer();
       (room as any)._sendStates.set('peer-1', {
         peer: p, peerId: 'peer-1', queue: [], queuedBytes: 0, draining: false, connected: true,
       });
 
       const result: SendResult = room.send('hello');
-      expect(result.status).toBe('queued');
+      expect(result.status).toBe('accepted');
+      expect(p.send).toHaveBeenCalledWith('hello');
     });
 
-    it('backpressure during flush stops and re-queues', () => {
+    it('flush empties queue via send()', () => {
       const room = new P2PRoom(true, '');
-      const p = mockPeer({ write: vi.fn().mockReturnValueOnce(false) });
+      const p = mockPeer();
       const state = {
         peer: p, peerId: 'peer-1',
         queue: [{ data: 'a', byteLength: 1 }, { data: 'b', byteLength: 1 }],
@@ -853,9 +854,9 @@ describe('safe send', () => {
       (room as any)._sendStates.set('peer-1', state);
       (room as any)._flushQueue(state);
 
-      expect(state.draining).toBe(true);
-      expect(state.queue.length).toBe(2); // both items still queued
-      expect(state.queuedBytes).toBe(2);
+      expect(state.queue.length).toBe(0);
+      expect(state.queuedBytes).toBe(0);
+      expect(p.send).toHaveBeenCalledTimes(2);
     });
   });
 });

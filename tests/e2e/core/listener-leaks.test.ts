@@ -51,7 +51,7 @@ vi.mock('simple-peer', () => ({
 
     this.signal = vi.fn();
     this.send = vi.fn();
-    this.write = vi.fn().mockReturnValue(true);
+    this.send = vi.fn().mockReturnValue(true);
     this.bufferSize = 0;
     this.removeAllListeners = vi.fn(function (this: any, event?: string) {
       if (event) {
@@ -651,10 +651,10 @@ describe('broadcast duplicate prevention', () => {
 
     room.send('broadcast-msg');
 
-    expect(p1.write).toHaveBeenCalledTimes(1);
-    expect(p1.write).toHaveBeenCalledWith('broadcast-msg');
-    expect(p2.write).toHaveBeenCalledTimes(1);
-    expect(p2.write).toHaveBeenCalledWith('broadcast-msg');
+    expect(p1.send).toHaveBeenCalledTimes(1);
+    expect(p1.send).toHaveBeenCalledWith('broadcast-msg');
+    expect(p2.send).toHaveBeenCalledTimes(1);
+    expect(p2.send).toHaveBeenCalledWith('broadcast-msg');
   });
 
   it('broadcastExcept skips excluded peer entirely', () => {
@@ -665,9 +665,9 @@ describe('broadcast duplicate prevention', () => {
 
     room.broadcastExcept('data', 'peer-2');
 
-    expect(p1.write).toHaveBeenCalledWith('data');
-    expect(p2.write).not.toHaveBeenCalled();
-    expect(p3.write).toHaveBeenCalledWith('data');
+    expect(p1.send).toHaveBeenCalledWith('data');
+    expect(p2.send).not.toHaveBeenCalled();
+    expect(p3.send).toHaveBeenCalledWith('data');
   });
 
   it('disconnected peers are not sent messages', () => {
@@ -680,8 +680,8 @@ describe('broadcast duplicate prevention', () => {
     room.send('msg');
 
     // peer-1 is disconnected: write should NOT be called
-    expect(p1.write).not.toHaveBeenCalled();
-    expect(p2.write).toHaveBeenCalledWith('msg');
+    expect(p1.send).not.toHaveBeenCalled();
+    expect(p2.send).toHaveBeenCalledWith('msg');
   });
 });
 
