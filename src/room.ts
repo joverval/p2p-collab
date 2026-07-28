@@ -156,7 +156,6 @@ export class P2PRoom implements Room {
         this._rtcConfig = {
           ...DEFAULT_ICE_CONFIG,
           ...userConfig,
-          iceTransportPolicy: 'all',
         };
         break;
     }
