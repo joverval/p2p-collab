@@ -159,7 +159,6 @@ export class P2PRoom implements Room {
         };
         break;
     }
-    console.log('[p2p] Room constructed — iceTransportPolicy:', this._rtcConfig.iceTransportPolicy, 'mode:', this._iceMode);
   }
 
   /** Generate an offer for a new peer. Host only. Returns { url, offerId }. */
